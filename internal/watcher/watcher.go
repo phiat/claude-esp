@@ -72,11 +72,21 @@ func isMainSessionFile(path string, info os.FileInfo) bool {
 
 // Session represents a Claude Code session with its files
 type Session struct {
-	ID          string
-	ProjectPath string
-	MainFile    string
-	Subagents   map[string]string // agentID -> file path
-	mu          sync.RWMutex      // protects Subagents map
+	ID              string
+	ProjectPath     string
+	MainFile        string
+	Subagents       map[string]string          // agentID -> file path
+	BackgroundTasks map[string]*BackgroundTask // toolID -> task info
+	mu              sync.RWMutex               // protects Subagents and BackgroundTasks maps
+}
+
+// BackgroundTask represents a background task launched by an agent
+type BackgroundTask struct {
+	ToolID        string // e.g., "toolu_01XYZ..."
+	ParentAgentID string // which agent spawned this (empty = main)
+	ToolName      string // e.g., "Bash: npm install"
+	OutputPath    string // path to tool-results file
+	IsComplete    bool   // whether the task has finished
 }
 
 // NewAgentMsg signals when a new agent is discovered
@@ -91,22 +101,33 @@ type NewSessionMsg struct {
 	ProjectPath string
 }
 
+// NewBackgroundTaskMsg signals when a new background task is discovered
+type NewBackgroundTaskMsg struct {
+	SessionID     string
+	ParentAgentID string
+	ToolID        string
+	ToolName      string
+	OutputPath    string
+	IsComplete    bool
+}
+
 // Watcher monitors Claude session files for new content
 type Watcher struct {
-	claudeDir      string
-	pollInterval   time.Duration
-	sessions       map[string]*Session
-	sessionsMu     sync.RWMutex      // protects sessions map
-	filePositions  map[string]int64  // track read position per file
-	Items          chan parser.StreamItem
-	Errors         chan error
-	NewAgent       chan NewAgentMsg
-	NewSession     chan NewSessionMsg
-	ctx            context.Context
-	cancel         context.CancelFunc
-	watchActive    bool          // if true, only watch recently modified sessions
-	activeWindow   time.Duration // how recent is "active"
-	skipHistory    bool          // if true, start from end of files (live only)
+	claudeDir         string
+	pollInterval      time.Duration
+	sessions          map[string]*Session
+	sessionsMu        sync.RWMutex      // protects sessions map
+	filePositions     map[string]int64  // track read position per file
+	Items             chan parser.StreamItem
+	Errors            chan error
+	NewAgent          chan NewAgentMsg
+	NewSession        chan NewSessionMsg
+	NewBackgroundTask chan NewBackgroundTaskMsg
+	ctx               context.Context
+	cancel            context.CancelFunc
+	watchActive       bool          // if true, only watch recently modified sessions
+	activeWindow      time.Duration // how recent is "active"
+	skipHistory       bool          // if true, start from end of files (live only)
 }
 
 // New creates a new watcher for active sessions
@@ -119,18 +140,19 @@ func New(sessionID string) (*Watcher, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	w := &Watcher{
-		claudeDir:     claudeDir,
-		pollInterval:  DefaultPollInterval,
-		sessions:      make(map[string]*Session),
-		filePositions: make(map[string]int64),
-		Items:         make(chan parser.StreamItem, ItemChannelBuffer),
-		Errors:        make(chan error, ErrorChannelBuffer),
-		NewAgent:      make(chan NewAgentMsg, ErrorChannelBuffer),
-		NewSession:    make(chan NewSessionMsg, ErrorChannelBuffer),
-		ctx:           ctx,
-		cancel:        cancel,
-		watchActive:   sessionID == "", // watch all active if no specific session
-		activeWindow:  DefaultActiveWindow,
+		claudeDir:         claudeDir,
+		pollInterval:      DefaultPollInterval,
+		sessions:          make(map[string]*Session),
+		filePositions:     make(map[string]int64),
+		Items:             make(chan parser.StreamItem, ItemChannelBuffer),
+		Errors:            make(chan error, ErrorChannelBuffer),
+		NewAgent:          make(chan NewAgentMsg, ErrorChannelBuffer),
+		NewSession:        make(chan NewSessionMsg, ErrorChannelBuffer),
+		NewBackgroundTask: make(chan NewBackgroundTaskMsg, ErrorChannelBuffer),
+		ctx:               ctx,
+		cancel:            cancel,
+		watchActive:       sessionID == "", // watch all active if no specific session
+		activeWindow:      DefaultActiveWindow,
 	}
 
 	if sessionID != "" {
@@ -223,10 +245,11 @@ func (w *Watcher) buildSession(mainFile string) (*Session, error) {
 	projectPath = strings.TrimPrefix(projectPath, "/")
 
 	session := &Session{
-		ID:          id,
-		ProjectPath: projectPath,
-		MainFile:    mainFile,
-		Subagents:   make(map[string]string),
+		ID:              id,
+		ProjectPath:     projectPath,
+		MainFile:        mainFile,
+		Subagents:       make(map[string]string),
+		BackgroundTasks: make(map[string]*BackgroundTask),
 	}
 
 	// Find subagent files
@@ -385,8 +408,236 @@ func (w *Watcher) handlePollTick() {
 
 	for _, session := range w.getSessionsSnapshot() {
 		w.checkForNewSubagents(session)
+		w.checkForBackgroundTasks(session)
 		w.readSessionFiles(session)
 	}
+}
+
+// checkForBackgroundTasks discovers background tasks in tool-results/ directory
+func (w *Watcher) checkForBackgroundTasks(session *Session) {
+	toolResultsDir := filepath.Join(filepath.Dir(session.MainFile), session.ID, "tool-results")
+	entries, err := os.ReadDir(toolResultsDir)
+	if err != nil {
+		return // tool-results dir doesn't exist yet
+	}
+
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".txt") {
+			continue
+		}
+
+		// Extract tool ID from filename (e.g., "toolu_01XYZ.txt" -> "toolu_01XYZ")
+		toolID := strings.TrimSuffix(entry.Name(), ".txt")
+
+		// Check if we already know about this task
+		session.mu.RLock()
+		_, exists := session.BackgroundTasks[toolID]
+		session.mu.RUnlock()
+
+		if exists {
+			continue
+		}
+
+		outputPath := filepath.Join(toolResultsDir, entry.Name())
+
+		// Try to find which agent spawned this task by searching JSONL files
+		parentAgentID, toolName := w.findBackgroundTaskParent(session, toolID)
+
+		// Check if complete by looking for tool_result in JSONL
+		isComplete := w.isBackgroundTaskComplete(session, toolID)
+
+		task := &BackgroundTask{
+			ToolID:        toolID,
+			ParentAgentID: parentAgentID,
+			ToolName:      toolName,
+			OutputPath:    outputPath,
+			IsComplete:    isComplete,
+		}
+
+		session.mu.Lock()
+		session.BackgroundTasks[toolID] = task
+		session.mu.Unlock()
+
+		// Notify about new background task
+		select {
+		case w.NewBackgroundTask <- NewBackgroundTaskMsg{
+			SessionID:     session.ID,
+			ParentAgentID: parentAgentID,
+			ToolID:        toolID,
+			ToolName:      toolName,
+			OutputPath:    outputPath,
+			IsComplete:    isComplete,
+		}:
+		default:
+		}
+	}
+}
+
+// findBackgroundTaskParent searches JSONL files to find which agent spawned a tool
+func (w *Watcher) findBackgroundTaskParent(session *Session, toolID string) (parentAgentID string, toolName string) {
+	// Search main file first
+	if name := w.findToolInFile(session.MainFile, toolID); name != "" {
+		return "", name // spawned by main
+	}
+
+	// Search subagent files
+	session.mu.RLock()
+	defer session.mu.RUnlock()
+	for agentID, path := range session.Subagents {
+		if name := w.findToolInFile(path, toolID); name != "" {
+			return agentID, name
+		}
+	}
+
+	return "", "Background Task" // fallback name
+}
+
+// findToolInFile searches a JSONL file for a tool_use with the given ID
+func (w *Watcher) findToolInFile(path string, toolID string) string {
+	file, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	buf := make([]byte, 0, ScannerInitBufferSize)
+	scanner.Buffer(buf, ScannerMaxBufferSize)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		// Quick check if this line might contain our tool ID
+		if !strings.Contains(line, toolID) {
+			continue
+		}
+
+		// Parse to extract tool name
+		toolName := extractToolNameFromLine(line, toolID)
+		if toolName != "" {
+			return toolName
+		}
+	}
+
+	return ""
+}
+
+// extractToolNameFromLine extracts tool name from a JSONL line containing the tool ID
+func extractToolNameFromLine(line string, toolID string) string {
+	// Simple extraction: look for "name":"<toolname>" near the tool ID
+	// This is a simplified approach - could use full JSON parsing if needed
+
+	// Find tool_use block with this ID
+	if !strings.Contains(line, `"type":"tool_use"`) && !strings.Contains(line, `"type": "tool_use"`) {
+		return ""
+	}
+
+	// Look for name field - try common patterns
+	patterns := []string{`"name":"`, `"name": "`}
+	for _, pattern := range patterns {
+		idx := strings.Index(line, pattern)
+		if idx == -1 {
+			continue
+		}
+		start := idx + len(pattern)
+		end := strings.Index(line[start:], `"`)
+		if end > 0 {
+			name := line[start : start+end]
+			// Try to get a command/pattern for context
+			return formatToolName(name, line)
+		}
+	}
+
+	return ""
+}
+
+// formatToolName creates a display name like "Bash: npm install"
+func formatToolName(toolName string, line string) string {
+	// For Bash, try to extract the command
+	if toolName == "Bash" {
+		if cmd := extractField(line, "command"); cmd != "" {
+			if len(cmd) > 30 {
+				cmd = cmd[:30] + "..."
+			}
+			return "Bash: " + cmd
+		}
+	}
+
+	// For Task, try to get description
+	if toolName == "Task" {
+		if desc := extractField(line, "description"); desc != "" {
+			if len(desc) > 30 {
+				desc = desc[:30] + "..."
+			}
+			return "Task: " + desc
+		}
+	}
+
+	return toolName
+}
+
+// extractField extracts a JSON field value (simple string extraction)
+func extractField(line string, field string) string {
+	patterns := []string{`"` + field + `":"`, `"` + field + `": "`}
+	for _, pattern := range patterns {
+		idx := strings.Index(line, pattern)
+		if idx == -1 {
+			continue
+		}
+		start := idx + len(pattern)
+		// Find the end quote, handling escaped quotes
+		end := start
+		for end < len(line) {
+			if line[end] == '"' && (end == start || line[end-1] != '\\') {
+				break
+			}
+			end++
+		}
+		if end > start {
+			return line[start:end]
+		}
+	}
+	return ""
+}
+
+// isBackgroundTaskComplete checks if a tool_result exists for the given tool ID
+func (w *Watcher) isBackgroundTaskComplete(session *Session, toolID string) bool {
+	// Check main file
+	if w.fileContainsToolResult(session.MainFile, toolID) {
+		return true
+	}
+
+	// Check subagent files
+	session.mu.RLock()
+	defer session.mu.RUnlock()
+	for _, path := range session.Subagents {
+		if w.fileContainsToolResult(path, toolID) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// fileContainsToolResult checks if a file contains a tool_result for the given tool ID
+func (w *Watcher) fileContainsToolResult(path string, toolID string) bool {
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	buf := make([]byte, 0, ScannerInitBufferSize)
+	scanner.Buffer(buf, ScannerMaxBufferSize)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.Contains(line, toolID) && strings.Contains(line, `"tool_result"`) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (w *Watcher) watchLoop() {

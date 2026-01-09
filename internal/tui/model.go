@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -52,10 +53,11 @@ func NewModel(sessionID string, skipHistory bool) *Model {
 type (
 	tickMsg         time.Time
 	streamItemMsg   parser.StreamItem
-	newAgentMsg     watcher.NewAgentMsg
-	newSessionMsg   watcher.NewSessionMsg
-	errMsg          error
-	watcherReadyMsg struct{}
+	newAgentMsg          watcher.NewAgentMsg
+	newSessionMsg        watcher.NewSessionMsg
+	newBackgroundTaskMsg watcher.NewBackgroundTaskMsg
+	errMsg               error
+	watcherReadyMsg      struct{}
 )
 
 // Init initializes the model
@@ -132,6 +134,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tree.AddSession(msg.SessionID, msg.ProjectPath)
 		m.stream.SetEnabledFilters(m.tree.GetEnabledFilters())
 
+	case newBackgroundTaskMsg:
+		m.tree.AddBackgroundTask(msg.SessionID, msg.ParentAgentID, msg.ToolID, msg.ToolName, msg.OutputPath, msg.IsComplete)
+
 	case errMsg:
 		m.err = msg
 
@@ -156,6 +161,8 @@ func (m *Model) pollWatcher() tea.Cmd {
 			return newAgentMsg(agent)
 		case session := <-m.watcher.NewSession:
 			return newSessionMsg(session)
+		case task := <-m.watcher.NewBackgroundTask:
+			return newBackgroundTaskMsg(task)
 		case err := <-m.watcher.Errors:
 			return errMsg(err)
 		default:
@@ -212,8 +219,14 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 
 	case " ", "enter":
 		if m.focus == FocusTree {
-			m.tree.Toggle()
-			m.stream.SetEnabledFilters(m.tree.GetEnabledFilters())
+			// For background tasks, Enter loads the output
+			if node := m.tree.GetSelectedNode(); node != nil && node.Type == NodeTypeBackgroundTask {
+				m.loadBackgroundTaskOutput(node)
+			} else {
+				// For other nodes, toggle enabled state
+				m.tree.Toggle()
+				m.stream.SetEnabledFilters(m.tree.GetEnabledFilters())
+			}
 		}
 
 	case "g":
@@ -256,6 +269,44 @@ func (m *Model) updateActivityStatus() {
 	for _, info := range m.watcher.GetActivityInfo(30 * time.Second) {
 		m.tree.UpdateActivity(info.SessionID, info.AgentID, info.IsActive)
 	}
+}
+
+func (m *Model) loadBackgroundTaskOutput(node *TreeNode) {
+	if node.OutputPath == "" {
+		return
+	}
+
+	// Read the file content
+	content, err := os.ReadFile(node.OutputPath)
+	if err != nil {
+		// Show error in stream
+		m.stream.AddItem(parser.StreamItem{
+			Type:      parser.TypeToolOutput,
+			SessionID: node.SessionID,
+			AgentID:   node.ParentAgentID,
+			Content:   fmt.Sprintf("Error reading task output: %v", err),
+			Timestamp: time.Now(),
+		})
+		return
+	}
+
+	// Create a stream item for the background task output
+	statusIcon := "⏳"
+	if node.IsComplete {
+		statusIcon = "✓"
+	}
+
+	m.stream.AddItem(parser.StreamItem{
+		Type:      parser.TypeToolOutput,
+		SessionID: node.SessionID,
+		AgentID:   node.ParentAgentID,
+		ToolName:  fmt.Sprintf("%s %s", statusIcon, node.Name),
+		Content:   string(content),
+		Timestamp: time.Now(),
+	})
+
+	// Scroll to bottom to see the new output
+	m.stream.ScrollDown(9999)
 }
 
 func (m *Model) updateLayout() {

@@ -9,25 +9,33 @@ import (
 type NodeType int
 
 const (
-	NodeTypeRoot    NodeType = iota
-	NodeTypeSession          // A Claude session
-	NodeTypeMain             // Main conversation within a session
-	NodeTypeAgent            // A subagent within a session
+	NodeTypeRoot           NodeType = iota
+	NodeTypeSession                 // A Claude session
+	NodeTypeMain                    // Main conversation within a session
+	NodeTypeAgent                   // A subagent within a session
+	NodeTypeBackgroundTask          // A background task (tool running in background)
 
 	// AgentIDDisplayLength is how many chars of agent ID to show in display name
 	AgentIDDisplayLength = 7
+	// ToolIDDisplayLength is how many chars of tool ID to show
+	ToolIDDisplayLength = 12
 )
 
 // TreeNode represents a node in the session/agent tree
 type TreeNode struct {
 	Type      NodeType
-	ID        string // session ID for sessions, agent ID for agents, empty for main/root
-	SessionID string // which session this belongs to (for main/agent nodes)
+	ID        string // session ID for sessions, agent ID for agents, tool ID for bg tasks
+	SessionID string // which session this belongs to (for main/agent/task nodes)
 	Name      string
 	Enabled   bool
 	IsActive  bool // whether this node has recent activity (for main/agent nodes)
 	Children  []*TreeNode
 	Parent    *TreeNode
+
+	// Background task specific fields
+	ParentAgentID string // which agent spawned this task (empty = main)
+	OutputPath    string // path to tool-results file
+	IsComplete    bool   // whether the task has finished
 }
 
 // TreeView manages the tree of sessions and agents
@@ -130,6 +138,94 @@ func (t *TreeView) AddAgent(sessionID, agentID string) {
 	}
 	session.Children = append(session.Children, node)
 	t.rebuildNodeList()
+}
+
+// AddBackgroundTask adds a background task under the appropriate agent/main node
+func (t *TreeView) AddBackgroundTask(sessionID, parentAgentID, toolID, toolName, outputPath string, isComplete bool) {
+	// Find the session node
+	var session *TreeNode
+	for _, child := range t.Root.Children {
+		if child.Type == NodeTypeSession && child.ID == sessionID {
+			session = child
+			break
+		}
+	}
+
+	if session == nil {
+		return // Session not found
+	}
+
+	// Find the parent node (Main or Agent)
+	var parent *TreeNode
+	for _, child := range session.Children {
+		if parentAgentID == "" && child.Type == NodeTypeMain {
+			parent = child
+			break
+		} else if child.Type == NodeTypeAgent && child.ID == parentAgentID {
+			parent = child
+			break
+		}
+	}
+
+	if parent == nil {
+		return // Parent not found
+	}
+
+	// Check if task already exists
+	for _, child := range parent.Children {
+		if child.Type == NodeTypeBackgroundTask && child.ID == toolID {
+			// Update completion status if changed
+			child.IsComplete = isComplete
+			return
+		}
+	}
+
+	// Truncate tool name for display
+	displayName := toolName
+	if len(displayName) > 25 {
+		displayName = displayName[:25] + "..."
+	}
+
+	node := &TreeNode{
+		Type:          NodeTypeBackgroundTask,
+		ID:            toolID,
+		SessionID:     sessionID,
+		Name:          displayName,
+		Enabled:       true,
+		IsActive:      !isComplete,
+		Parent:        parent,
+		ParentAgentID: parentAgentID,
+		OutputPath:    outputPath,
+		IsComplete:    isComplete,
+	}
+	parent.Children = append(parent.Children, node)
+	t.rebuildNodeList()
+}
+
+// UpdateBackgroundTaskStatus updates a background task's completion status
+func (t *TreeView) UpdateBackgroundTaskStatus(sessionID, toolID string, isComplete bool) {
+	for _, session := range t.Root.Children {
+		if session.Type != NodeTypeSession || session.ID != sessionID {
+			continue
+		}
+		for _, agent := range session.Children {
+			for _, child := range agent.Children {
+				if child.Type == NodeTypeBackgroundTask && child.ID == toolID {
+					child.IsComplete = isComplete
+					child.IsActive = !isComplete
+					return
+				}
+			}
+		}
+	}
+}
+
+// GetSelectedNode returns the currently selected node
+func (t *TreeView) GetSelectedNode() *TreeNode {
+	if t.cursor >= 0 && t.cursor < len(t.nodes) {
+		return t.nodes[t.cursor]
+	}
+	return nil
 }
 
 // rebuildNodeList flattens the tree for navigation (excluding hidden root)
@@ -373,6 +469,12 @@ func (t *TreeView) View() string {
 				icon = "🤖 "
 			} else {
 				icon = "💤 "
+			}
+		case NodeTypeBackgroundTask:
+			if node.IsComplete {
+				icon = "✓ "
+			} else {
+				icon = "⏳ "
 			}
 		}
 
