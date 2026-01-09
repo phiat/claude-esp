@@ -23,6 +23,9 @@ const (
 	ItemChannelBuffer = 100
 	// ErrorChannelBuffer is the buffer size for error channels
 	ErrorChannelBuffer = 10
+	// AutoSkipThreshold is the total file size above which we auto-skip history
+	// ~30KB of JSONL roughly equals 3 panes of rendered content
+	AutoSkipThreshold = 30 * 1024
 )
 
 // isMainSessionFile returns true if the path is a main session JSONL file
@@ -276,8 +279,15 @@ func (w *Watcher) watchLoop() {
 	}
 	w.sessionsMu.RUnlock()
 
-	// If skipHistory is set, initialize file positions to current file sizes
-	if w.skipHistory {
+	// Determine whether to skip history
+	shouldSkip := w.skipHistory
+	if !shouldSkip {
+		// Auto-skip if total file size exceeds threshold
+		totalSize := w.calculateTotalFileSize(sessions)
+		shouldSkip = totalSize > AutoSkipThreshold
+	}
+
+	if shouldSkip {
 		for _, session := range sessions {
 			w.skipToEndOfFiles(session)
 		}
@@ -392,6 +402,23 @@ func (w *Watcher) checkForNewSubagents(session *Session) {
 			}
 		}
 	}
+}
+
+func (w *Watcher) calculateTotalFileSize(sessions []*Session) int64 {
+	var total int64
+	for _, session := range sessions {
+		if info, err := os.Stat(session.MainFile); err == nil {
+			total += info.Size()
+		}
+		session.mu.RLock()
+		for _, path := range session.Subagents {
+			if info, err := os.Stat(path); err == nil {
+				total += info.Size()
+			}
+		}
+		session.mu.RUnlock()
+	}
+	return total
 }
 
 func (w *Watcher) skipToEndOfFiles(session *Session) {
