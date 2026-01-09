@@ -1,0 +1,351 @@
+package tui
+
+import (
+	"fmt"
+	"strings"
+)
+
+// NodeType indicates the type of tree node
+type NodeType int
+
+const (
+	NodeTypeRoot    NodeType = iota
+	NodeTypeSession          // A Claude session
+	NodeTypeMain             // Main conversation within a session
+	NodeTypeAgent            // A subagent within a session
+)
+
+// TreeNode represents a node in the session/agent tree
+type TreeNode struct {
+	Type      NodeType
+	ID        string // session ID for sessions, agent ID for agents, empty for main/root
+	SessionID string // which session this belongs to (for main/agent nodes)
+	Name      string
+	Enabled   bool
+	Children  []*TreeNode
+	Parent    *TreeNode
+}
+
+// TreeView manages the tree of sessions and agents
+type TreeView struct {
+	Root   *TreeNode
+	nodes  []*TreeNode // flattened list for navigation
+	cursor int
+	width  int
+	height int
+}
+
+// NewTreeView creates a new tree view with a hidden root
+func NewTreeView() *TreeView {
+	root := &TreeNode{
+		Type:    NodeTypeRoot,
+		Name:    "Sessions",
+		Enabled: true,
+	}
+	return &TreeView{
+		Root:   root,
+		nodes:  []*TreeNode{},
+		cursor: 0,
+	}
+}
+
+// AddSession adds a new session to the tree
+func (t *TreeView) AddSession(sessionID, projectPath string) *TreeNode {
+	// Check if session already exists
+	for _, child := range t.Root.Children {
+		if child.ID == sessionID {
+			return child
+		}
+	}
+
+	// Create a short display name from the project path
+	displayName := projectPath
+	parts := strings.Split(projectPath, "/")
+	if len(parts) > 2 {
+		displayName = parts[len(parts)-1]
+	}
+	if len(displayName) > 15 {
+		displayName = displayName[:15]
+	}
+
+	session := &TreeNode{
+		Type:    NodeTypeSession,
+		ID:      sessionID,
+		Name:    displayName,
+		Enabled: true,
+		Parent:  t.Root,
+	}
+
+	// Add Main node under the session
+	main := &TreeNode{
+		Type:      NodeTypeMain,
+		SessionID: sessionID,
+		Name:      "Main",
+		Enabled:   true,
+		Parent:    session,
+	}
+	session.Children = append(session.Children, main)
+
+	t.Root.Children = append(t.Root.Children, session)
+	t.rebuildNodeList()
+	return session
+}
+
+// AddAgent adds a subagent under a session
+func (t *TreeView) AddAgent(sessionID, agentID string) {
+	// Find the session node
+	var session *TreeNode
+	for _, child := range t.Root.Children {
+		if child.Type == NodeTypeSession && child.ID == sessionID {
+			session = child
+			break
+		}
+	}
+
+	if session == nil {
+		return // Session not found
+	}
+
+	// Check if agent already exists
+	for _, child := range session.Children {
+		if child.Type == NodeTypeAgent && child.ID == agentID {
+			return
+		}
+	}
+
+	node := &TreeNode{
+		Type:      NodeTypeAgent,
+		ID:        agentID,
+		SessionID: sessionID,
+		Name:      fmt.Sprintf("Agent-%s", agentID[:min(7, len(agentID))]),
+		Enabled:   true,
+		Parent:    session,
+	}
+	session.Children = append(session.Children, node)
+	t.rebuildNodeList()
+}
+
+// rebuildNodeList flattens the tree for navigation (excluding hidden root)
+func (t *TreeView) rebuildNodeList() {
+	t.nodes = nil
+	for _, child := range t.Root.Children {
+		t.flattenNode(child, 0)
+	}
+	// Ensure cursor is valid
+	if t.cursor >= len(t.nodes) {
+		t.cursor = max(0, len(t.nodes)-1)
+	}
+}
+
+func (t *TreeView) flattenNode(node *TreeNode, depth int) {
+	t.nodes = append(t.nodes, node)
+	for _, child := range node.Children {
+		t.flattenNode(child, depth+1)
+	}
+}
+
+// MoveUp moves cursor up
+func (t *TreeView) MoveUp() {
+	if t.cursor > 0 {
+		t.cursor--
+	}
+}
+
+// MoveDown moves cursor down
+func (t *TreeView) MoveDown() {
+	if t.cursor < len(t.nodes)-1 {
+		t.cursor++
+	}
+}
+
+// Toggle toggles the enabled state of current node
+func (t *TreeView) Toggle() {
+	if t.cursor >= 0 && t.cursor < len(t.nodes) {
+		node := t.nodes[t.cursor]
+		node.Enabled = !node.Enabled
+
+		// If toggling a session, toggle all children too
+		if node.Type == NodeTypeSession {
+			for _, child := range node.Children {
+				child.Enabled = node.Enabled
+			}
+		}
+	}
+}
+
+// EnabledFilter represents which sessions/agents are enabled
+type EnabledFilter struct {
+	SessionID string
+	AgentID   string // empty string means main
+}
+
+// GetEnabledFilters returns list of enabled session+agent combinations
+func (t *TreeView) GetEnabledFilters() []EnabledFilter {
+	var filters []EnabledFilter
+	for _, node := range t.nodes {
+		if !node.Enabled {
+			continue
+		}
+		switch node.Type {
+		case NodeTypeMain:
+			filters = append(filters, EnabledFilter{
+				SessionID: node.SessionID,
+				AgentID:   "", // main
+			})
+		case NodeTypeAgent:
+			filters = append(filters, EnabledFilter{
+				SessionID: node.SessionID,
+				AgentID:   node.ID,
+			})
+		}
+	}
+	return filters
+}
+
+// IsEnabled checks if a session+agent combo is enabled
+func (t *TreeView) IsEnabled(sessionID, agentID string) bool {
+	for _, node := range t.nodes {
+		if !node.Enabled {
+			continue
+		}
+		if node.Type == NodeTypeMain && node.SessionID == sessionID && agentID == "" {
+			return true
+		}
+		if node.Type == NodeTypeAgent && node.SessionID == sessionID && node.ID == agentID {
+			return true
+		}
+	}
+	return false
+}
+
+// SetSize sets the dimensions
+func (t *TreeView) SetSize(width, height int) {
+	t.width = width
+	t.height = height
+}
+
+// View renders the tree
+func (t *TreeView) View() string {
+	if len(t.nodes) == 0 {
+		return mutedStyle.Render("No sessions")
+	}
+
+	var b strings.Builder
+
+	for i, node := range t.nodes {
+		// Determine indent (sessions are depth 0, main/agents are depth 1)
+		depth := t.getDepth(node) - 1 // -1 because we skip the hidden root
+		if depth < 0 {
+			depth = 0
+		}
+		indent := strings.Repeat("  ", depth)
+
+		// Checkbox
+		checkbox := "☑"
+		checkStyle := treeCheckedStyle
+		if !node.Enabled {
+			checkbox = "☐"
+			checkStyle = treeUncheckedStyle
+		}
+
+		// Tree branch character
+		branch := ""
+		if depth > 0 {
+			if t.isLastChild(node) {
+				branch = "└─"
+			} else {
+				branch = "├─"
+			}
+		}
+
+		// Icon based on node type
+		icon := ""
+		switch node.Type {
+		case NodeTypeSession:
+			icon = "📁 "
+		case NodeTypeMain:
+			icon = "💬 "
+		case NodeTypeAgent:
+			icon = "🤖 "
+		}
+
+		// Build line
+		line := fmt.Sprintf("%s%s%s %s%s",
+			indent,
+			branch,
+			checkStyle.Render(checkbox),
+			icon,
+			node.Name,
+		)
+
+		// Apply selection style
+		if i == t.cursor {
+			line = treeSelectedStyle.Render(line)
+		} else {
+			line = treeNormalStyle.Render(line)
+		}
+
+		// Ensure consistent width
+		if t.width > 0 {
+			lineLen := lipglossWidth(line)
+			if lineLen < t.width-2 {
+				line += strings.Repeat(" ", t.width-2-lineLen)
+			}
+		}
+
+		b.WriteString(line)
+		if i < len(t.nodes)-1 {
+			b.WriteString("\n")
+		}
+	}
+
+	// Pad to fill height
+	lines := strings.Count(b.String(), "\n") + 1
+	for i := lines; i < t.height-2; i++ {
+		b.WriteString("\n")
+	}
+
+	return b.String()
+}
+
+func (t *TreeView) getDepth(node *TreeNode) int {
+	depth := 0
+	current := node
+	for current.Parent != nil {
+		depth++
+		current = current.Parent
+	}
+	return depth
+}
+
+func (t *TreeView) isLastChild(node *TreeNode) bool {
+	if node.Parent == nil {
+		return true
+	}
+	children := node.Parent.Children
+	return len(children) > 0 && children[len(children)-1] == node
+}
+
+// lipglossWidth calculates visible width accounting for ANSI codes
+func lipglossWidth(s string) int {
+	return len([]rune(stripAnsi(s)))
+}
+
+func stripAnsi(s string) string {
+	var result strings.Builder
+	inEscape := false
+	for _, r := range s {
+		if r == '\x1b' {
+			inEscape = true
+			continue
+		}
+		if inEscape {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+				inEscape = false
+			}
+			continue
+		}
+		result.WriteRune(r)
+	}
+	return result.String()
+}
