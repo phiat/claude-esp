@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/phiat/claude-esp/internal/parser"
@@ -126,9 +127,9 @@ type Watcher struct {
 	NewBackgroundTask chan NewBackgroundTaskMsg
 	ctx               context.Context
 	cancel            context.CancelFunc
-	watchActive       bool          // if true, only watch recently modified sessions
+	watchActive       atomic.Bool   // if true, only watch recently modified sessions
 	activeWindow      time.Duration // how recent is "active"
-	skipHistory       bool          // if true, start from end of files (live only)
+	skipHistory       atomic.Bool   // if true, start from end of files (live only)
 }
 
 // New creates a new watcher for active sessions
@@ -152,9 +153,9 @@ func New(sessionID string) (*Watcher, error) {
 		NewBackgroundTask: make(chan NewBackgroundTaskMsg, ErrorChannelBuffer),
 		ctx:               ctx,
 		cancel:            cancel,
-		watchActive:       sessionID == "", // watch all active if no specific session
 		activeWindow:      DefaultActiveWindow,
 	}
+	w.watchActive.Store(sessionID == "") // watch all active if no specific session
 
 	if sessionID != "" {
 		// Watch a specific session
@@ -297,7 +298,7 @@ func (w *Watcher) discoverActiveSessions() error {
 
 // SetSkipHistory configures the watcher to start from the end of files
 func (w *Watcher) SetSkipHistory(skip bool) {
-	w.skipHistory = skip
+	w.skipHistory.Store(skip)
 }
 
 // RemoveSession removes a session from being watched
@@ -309,12 +310,13 @@ func (w *Watcher) RemoveSession(sessionID string) {
 
 // ToggleAutoDiscovery toggles automatic discovery of new sessions
 func (w *Watcher) ToggleAutoDiscovery() {
-	w.watchActive = !w.watchActive
+	current := w.watchActive.Load()
+	w.watchActive.Store(!current)
 }
 
 // IsAutoDiscoveryEnabled returns whether auto-discovery is enabled
 func (w *Watcher) IsAutoDiscoveryEnabled() bool {
-	return w.watchActive
+	return w.watchActive.Load()
 }
 
 // ActivityInfo contains activity status for a session/agent
@@ -383,7 +385,7 @@ func (w *Watcher) getSessionsSnapshot() []*Session {
 
 // initializeSessionReading reads or skips existing session content at startup
 func (w *Watcher) initializeSessionReading(sessions []*Session) {
-	shouldSkip := w.skipHistory
+	shouldSkip := w.skipHistory.Load()
 	if !shouldSkip {
 		// Auto-skip if total line count exceeds threshold
 		totalLines := w.countTotalLines(sessions)
@@ -403,7 +405,7 @@ func (w *Watcher) initializeSessionReading(sessions []*Session) {
 
 // handlePollTick processes a single poll interval
 func (w *Watcher) handlePollTick() {
-	if w.watchActive {
+	if w.watchActive.Load() {
 		w.checkForNewSessions()
 	}
 
@@ -901,6 +903,14 @@ func (w *Watcher) readFile(path string, sessionID string, agentID string) {
 			case <-w.ctx.Done():
 				return
 			}
+		}
+	}
+
+	// Check for scanner errors
+	if err := scanner.Err(); err != nil {
+		select {
+		case w.Errors <- fmt.Errorf("scanner error reading %s: %w", path, err):
+		default:
 		}
 	}
 

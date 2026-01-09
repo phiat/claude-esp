@@ -101,12 +101,12 @@ func (s *StreamView) ToggleAutoScroll() {
 // ScrollUp scrolls the viewport up
 func (s *StreamView) ScrollUp(lines int) {
 	s.autoScroll = false
-	s.viewport.LineUp(lines)
+	s.viewport.ScrollUp(lines)
 }
 
 // ScrollDown scrolls the viewport down
 func (s *StreamView) ScrollDown(lines int) {
-	s.viewport.LineDown(lines)
+	s.viewport.ScrollDown(lines)
 }
 
 // IsThinkingEnabled returns thinking filter state

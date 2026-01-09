@@ -91,11 +91,6 @@ var (
 	separatorStyle = lipgloss.NewStyle().
 			Foreground(mutedColor)
 
-	// Timestamp style
-	timestampStyle = lipgloss.NewStyle().
-			Foreground(mutedColor).
-			Italic(true)
-
 	// Muted text style (for truncation messages etc)
 	mutedStyle = lipgloss.NewStyle().
 			Foreground(mutedColor)
@@ -110,12 +105,4 @@ func truncate(s string, max int) string {
 		return s[:max]
 	}
 	return s[:max-3] + "..."
-}
-
-// Helper to wrap text
-func wordWrap(s string, width int) string {
-	if width <= 0 {
-		return s
-	}
-	return lipgloss.NewStyle().Width(width).Render(s)
 }

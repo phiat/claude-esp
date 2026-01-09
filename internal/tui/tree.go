@@ -285,7 +285,7 @@ func (t *TreeView) GetSelectedSession() string {
 	switch node.Type {
 	case NodeTypeSession:
 		return node.ID
-	case NodeTypeMain, NodeTypeAgent:
+	case NodeTypeMain, NodeTypeAgent, NodeTypeBackgroundTask:
 		return node.SessionID
 	}
 	return ""
