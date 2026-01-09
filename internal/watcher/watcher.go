@@ -118,6 +118,7 @@ type Watcher struct {
 	sessions          map[string]*Session
 	sessionsMu        sync.RWMutex      // protects sessions map
 	filePositions     map[string]int64  // track read position per file
+	filePosMu         sync.RWMutex      // protects filePositions map
 	Items             chan parser.StreamItem
 	Errors            chan error
 	NewAgent          chan NewAgentMsg
@@ -778,14 +779,28 @@ func countFileLines(path string) int {
 
 func (w *Watcher) skipToEndOfFiles(session *Session) {
 	// Set position to near end of main file, keeping last N lines
-	w.filePositions[session.MainFile] = findPositionForLastNLines(session.MainFile, KeepRecentLines)
+	mainPos := findPositionForLastNLines(session.MainFile, KeepRecentLines)
 
-	// Set position to near end of all subagent files
+	// Get subagent positions
 	session.mu.RLock()
+	subagentPaths := make([]string, 0, len(session.Subagents))
 	for _, path := range session.Subagents {
-		w.filePositions[path] = findPositionForLastNLines(path, KeepRecentLines)
+		subagentPaths = append(subagentPaths, path)
 	}
 	session.mu.RUnlock()
+
+	subagentPositions := make(map[string]int64, len(subagentPaths))
+	for _, path := range subagentPaths {
+		subagentPositions[path] = findPositionForLastNLines(path, KeepRecentLines)
+	}
+
+	// Write all positions under lock
+	w.filePosMu.Lock()
+	w.filePositions[session.MainFile] = mainPos
+	for path, pos := range subagentPositions {
+		w.filePositions[path] = pos
+	}
+	w.filePosMu.Unlock()
 }
 
 // findPositionForLastNLines returns the byte offset to start reading the last N lines
@@ -848,7 +863,9 @@ func (w *Watcher) readFile(path string, sessionID string, agentID string) {
 	defer file.Close()
 
 	// Seek to last known position
+	w.filePosMu.RLock()
 	pos, exists := w.filePositions[path]
+	w.filePosMu.RUnlock()
 	if exists {
 		file.Seek(pos, 0)
 	}
@@ -889,11 +906,15 @@ func (w *Watcher) readFile(path string, sessionID string, agentID string) {
 
 	// Update position
 	newPos, _ := file.Seek(0, 1)
+	w.filePosMu.Lock()
 	w.filePositions[path] = newPos
+	w.filePosMu.Unlock()
 }
 
 // cleanupFilePositions removes entries for files that no longer exist
 func (w *Watcher) cleanupFilePositions() {
+	w.filePosMu.Lock()
+	defer w.filePosMu.Unlock()
 	for path := range w.filePositions {
 		if _, err := os.Stat(path); os.IsNotExist(err) {
 			delete(w.filePositions, path)

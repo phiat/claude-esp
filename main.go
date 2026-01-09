@@ -52,7 +52,7 @@ func main() {
 			if s.IsActive {
 				status = "● "
 			}
-			fmt.Printf("  %s%s  %s\n", status, s.ID[:12], truncatePath(s.ProjectPath, 40))
+			fmt.Printf("  %s%s  %s\n", status, s.ID[:min(12, len(s.ID))], truncatePath(s.ProjectPath, 40))
 		}
 		return
 	}
@@ -69,7 +69,7 @@ func main() {
 			if s.IsActive {
 				status = "● "
 			}
-			fmt.Printf("  %s%s  %s  %s\n", status, s.Modified.Format("15:04:05"), s.ID[:12], truncatePath(s.ProjectPath, 30))
+			fmt.Printf("  %s%s  %s  %s\n", status, s.Modified.Format("15:04:05"), s.ID[:min(12, len(s.ID))], truncatePath(s.ProjectPath, 30))
 		}
 		return
 	}
