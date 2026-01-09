@@ -28,7 +28,28 @@ const (
 	AutoSkipLineThreshold = 100
 	// KeepRecentLines is how many recent lines to show when auto-skipping
 	KeepRecentLines = 10
+	// CleanupInterval is how often to clean up stale file position entries
+	CleanupInterval = 5 * time.Minute
+	// FileReadBufferSize is the buffer size for reading files (32KB)
+	FileReadBufferSize = 32 * 1024
+	// ScannerInitBufferSize is the initial buffer for JSON line scanner (64KB)
+	ScannerInitBufferSize = 64 * 1024
+	// ScannerMaxBufferSize is the max buffer for JSON line scanner (1MB)
+	ScannerMaxBufferSize = 1024 * 1024
+	// AgentIDDisplayLength is how many chars of agent ID to show in display name
+	AgentIDDisplayLength = 7
+	// RecentActivityThreshold is how recent a session must be to show as "active" in listings
+	RecentActivityThreshold = 2 * time.Minute
 )
+
+// getClaudeProjectsDir returns the path to Claude's projects directory
+func getClaudeProjectsDir() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get home dir: %w", err)
+	}
+	return filepath.Join(homeDir, ".claude", "projects"), nil
+}
 
 // isMainSessionFile returns true if the path is a main session JSONL file
 // (not a subagent file, not a directory)
@@ -90,12 +111,11 @@ type Watcher struct {
 
 // New creates a new watcher for active sessions
 func New(sessionID string) (*Watcher, error) {
-	homeDir, err := os.UserHomeDir()
+	claudeDir, err := getClaudeProjectsDir()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get home dir: %w", err)
+		return nil, err
 	}
 
-	claudeDir := filepath.Join(homeDir, ".claude", "projects")
 	ctx, cancel := context.WithCancel(context.Background())
 
 	w := &Watcher{
@@ -326,22 +346,19 @@ func (w *Watcher) Stop() {
 	w.cancel()
 }
 
-func (w *Watcher) watchLoop() {
-	ticker := time.NewTicker(w.pollInterval)
-	defer ticker.Stop()
-
-	cleanupTicker := time.NewTicker(5 * time.Minute)
-	defer cleanupTicker.Stop()
-
-	// Initial read of all sessions
+// getSessionsSnapshot returns a copy of all sessions to avoid holding lock during iteration
+func (w *Watcher) getSessionsSnapshot() []*Session {
 	w.sessionsMu.RLock()
+	defer w.sessionsMu.RUnlock()
 	sessions := make([]*Session, 0, len(w.sessions))
 	for _, s := range w.sessions {
 		sessions = append(sessions, s)
 	}
-	w.sessionsMu.RUnlock()
+	return sessions
+}
 
-	// Determine whether to skip history
+// initializeSessionReading reads or skips existing session content at startup
+func (w *Watcher) initializeSessionReading(sessions []*Session) {
 	shouldSkip := w.skipHistory
 	if !shouldSkip {
 		// Auto-skip if total line count exceeds threshold
@@ -358,6 +375,28 @@ func (w *Watcher) watchLoop() {
 			w.readSessionFiles(session)
 		}
 	}
+}
+
+// handlePollTick processes a single poll interval
+func (w *Watcher) handlePollTick() {
+	if w.watchActive {
+		w.checkForNewSessions()
+	}
+
+	for _, session := range w.getSessionsSnapshot() {
+		w.checkForNewSubagents(session)
+		w.readSessionFiles(session)
+	}
+}
+
+func (w *Watcher) watchLoop() {
+	ticker := time.NewTicker(w.pollInterval)
+	defer ticker.Stop()
+
+	cleanupTicker := time.NewTicker(CleanupInterval)
+	defer cleanupTicker.Stop()
+
+	w.initializeSessionReading(w.getSessionsSnapshot())
 
 	for {
 		select {
@@ -366,24 +405,7 @@ func (w *Watcher) watchLoop() {
 		case <-cleanupTicker.C:
 			w.cleanupFilePositions()
 		case <-ticker.C:
-			// Check for new active sessions if watching all
-			if w.watchActive {
-				w.checkForNewSessions()
-			}
-
-			// Get snapshot of sessions to avoid holding lock during iteration
-			w.sessionsMu.RLock()
-			sessions := make([]*Session, 0, len(w.sessions))
-			for _, s := range w.sessions {
-				sessions = append(sessions, s)
-			}
-			w.sessionsMu.RUnlock()
-
-			// Check for new subagents and read updates
-			for _, session := range sessions {
-				w.checkForNewSubagents(session)
-				w.readSessionFiles(session)
-			}
+			w.handlePollTick()
 		}
 	}
 }
@@ -488,7 +510,7 @@ func countFileLines(path string) int {
 	defer file.Close()
 
 	count := 0
-	buf := make([]byte, 32*1024)
+	buf := make([]byte, FileReadBufferSize)
 	for {
 		n, err := file.Read(buf)
 		for i := 0; i < n; i++ {
@@ -526,7 +548,7 @@ func findPositionForLastNLines(path string, n int) int64 {
 	// Collect positions of all newlines
 	var newlinePositions []int64
 	var pos int64
-	buf := make([]byte, 32*1024)
+	buf := make([]byte, FileReadBufferSize)
 	for {
 		bytesRead, err := file.Read(buf)
 		for i := 0; i < bytesRead; i++ {
@@ -582,8 +604,8 @@ func (w *Watcher) readFile(path string, sessionID string, agentID string) {
 
 	scanner := bufio.NewScanner(file)
 	// Increase buffer size for large JSON lines
-	buf := make([]byte, 0, 64*1024)
-	scanner.Buffer(buf, 1024*1024)
+	buf := make([]byte, 0, ScannerInitBufferSize)
+	scanner.Buffer(buf, ScannerMaxBufferSize)
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -603,7 +625,7 @@ func (w *Watcher) readFile(path string, sessionID string, agentID string) {
 			// Set agent ID from context if not already set
 			if agentID != "" && item.AgentID == "" {
 				item.AgentID = agentID
-				item.AgentName = fmt.Sprintf("Agent-%s", agentID[:min(7, len(agentID))])
+				item.AgentName = fmt.Sprintf("Agent-%s", agentID[:min(AgentIDDisplayLength, len(agentID))])
 			}
 
 			select {
@@ -639,12 +661,11 @@ func ListActiveSessions(within time.Duration) ([]SessionInfo, error) {
 }
 
 func listSessionsFiltered(limit int, activeWithin time.Duration) ([]SessionInfo, error) {
-	homeDir, err := os.UserHomeDir()
+	claudeDir, err := getClaudeProjectsDir()
 	if err != nil {
 		return nil, err
 	}
 
-	claudeDir := filepath.Join(homeDir, ".claude", "projects")
 	var sessions []SessionInfo
 	now := time.Now()
 
@@ -672,7 +693,7 @@ func listSessionsFiltered(limit int, activeWithin time.Duration) ([]SessionInfo,
 			Path:        path,
 			ProjectPath: projectPath,
 			Modified:    info.ModTime(),
-			IsActive:    now.Sub(info.ModTime()) < 2*time.Minute,
+			IsActive:    now.Sub(info.ModTime()) < RecentActivityThreshold,
 		})
 		return nil
 	})

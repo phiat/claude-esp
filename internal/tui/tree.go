@@ -13,6 +13,9 @@ const (
 	NodeTypeSession          // A Claude session
 	NodeTypeMain             // Main conversation within a session
 	NodeTypeAgent            // A subagent within a session
+
+	// AgentIDDisplayLength is how many chars of agent ID to show in display name
+	AgentIDDisplayLength = 7
 )
 
 // TreeNode represents a node in the session/agent tree
@@ -120,7 +123,7 @@ func (t *TreeView) AddAgent(sessionID, agentID string) {
 		Type:      NodeTypeAgent,
 		ID:        agentID,
 		SessionID: sessionID,
-		Name:      fmt.Sprintf("Agent-%s", agentID[:min(7, len(agentID))]),
+		Name:      fmt.Sprintf("Agent-%s", agentID[:min(AgentIDDisplayLength, len(agentID))]),
 		Enabled:   true,
 		IsActive:  true,
 		Parent:    session,

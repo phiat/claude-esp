@@ -15,6 +15,9 @@ const (
 	TypeToolInput  StreamItemType = "tool_input"
 	TypeToolOutput StreamItemType = "tool_output"
 	TypeText       StreamItemType = "text"
+
+	// AgentIDDisplayLength is how many chars of agent ID to show in display name
+	AgentIDDisplayLength = 7
 )
 
 // StreamItem represents a single item in the output stream
@@ -117,7 +120,7 @@ func parseAssistantMessage(raw RawMessage, timestamp time.Time) []StreamItem {
 	var items []StreamItem
 	agentName := "Main"
 	if raw.AgentID != "" {
-		agentName = fmt.Sprintf("Agent-%s", raw.AgentID[:min(7, len(raw.AgentID))])
+		agentName = fmt.Sprintf("Agent-%s", raw.AgentID[:min(AgentIDDisplayLength, len(raw.AgentID))])
 	}
 
 	for _, block := range msg.Content {
@@ -171,7 +174,7 @@ func parseUserMessage(raw RawMessage, timestamp time.Time) []StreamItem {
 	var items []StreamItem
 	agentName := "Main"
 	if raw.AgentID != "" {
-		agentName = fmt.Sprintf("Agent-%s", raw.AgentID[:min(7, len(raw.AgentID))])
+		agentName = fmt.Sprintf("Agent-%s", raw.AgentID[:min(AgentIDDisplayLength, len(raw.AgentID))])
 	}
 
 	for _, result := range results {
