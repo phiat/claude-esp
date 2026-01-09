@@ -141,18 +141,11 @@ claude-esp/
 │       ├── tree.go         # Session/agent tree view
 │       ├── stream.go       # Stacked output stream
 │       └── styles.go       # Lipgloss styling
-└── .beads/                 # Issue tracking (bd)
 ```
 
 ## Development
 
-This project uses [beads (bd)](https://github.com/anthropics/beads) for issue tracking:
-
-```bash
-bd ready          # Show available work
-bd show <id>      # View issue details
-bd list           # List all issues
-```
+Issue tracking was done with [beads](https://github.com/anthropics/beads).
 
 ## License
 
