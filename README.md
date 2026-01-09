@@ -2,6 +2,8 @@
 
 Stream Claude Code's hidden output (thinking, tool calls, subagents) to a separate terminal in real-time.
 
+![claude-esp screenshot](docs/screenshot.png)
+
 ## The Problem
 
 When using Claude Code interactively, tool outputs and thinking are collapsed by default and require pressing `Ctrl+O` to toggle visibility. This tool lets you watch all that output in a **separate terminal** with a nice TUI, without interrupting your main Claude Code session.
