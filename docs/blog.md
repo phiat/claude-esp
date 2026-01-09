@@ -22,8 +22,9 @@ The TUI displays four types of content:
 2. **Tool inputs** - What tool was called and with what parameters
 3. **Tool outputs** - The results that came back
 4. **Subagent activity** - Any spawned Task agents and their operations
+5. **Background tasks** - Tasks running in the background (⏳ running, ✓ complete)
 
-Each item shows which agent generated it (Main or Agent-abc123), with visual indicators for active vs idle agents.
+Each item shows which agent generated it (Main or Agent-abc123), with visual indicators for active vs idle agents. Background tasks appear under the agent that spawned them - press Enter to load their output.
 
 ## How It Works
 

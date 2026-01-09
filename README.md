@@ -14,6 +14,7 @@ When using Claude Code interactively, tool outputs and thinking are collapsed by
 - **Hierarchical tree view** - Sessions with nested Main/Agent nodes
 - **Real-time streaming** - See thinking, tool calls, and outputs as they happen
 - **Subagent tracking** - Automatically discovers and displays subagent activity
+- **Background task visibility** - See background tasks (⏳/✓) under spawning agent
 - **Filtering** - Toggle visibility of thinking, tools, outputs per session/agent
 - **Auto-scroll** - Follows new output, or scroll freely through history
 
@@ -71,20 +72,21 @@ claude
 
 ## Keybindings
 
-| Key       | Action                               |
-| --------- | ------------------------------------ |
-| `t`       | Toggle thinking visibility           |
-| `i`       | Toggle tool input visibility         |
-| `o`       | Toggle tool output visibility        |
-| `a`       | Toggle auto-scroll                   |
-| `h`       | Hide/show tree pane                  |
-| `A`       | Toggle auto-discovery of new sessions|
-| `tab`     | Switch focus between tree and stream |
-| `j/k/↑/↓` | Navigate tree or scroll stream       |
-| `space`   | Toggle selected item in tree         |
-| `x/d`     | Remove selected session from tree    |
-| `g/G`     | Go to top/bottom of stream           |
-| `q`       | Quit                                 |
+| Key       | Action                                    |
+| --------- | ----------------------------------------- |
+| `t`       | Toggle thinking visibility                |
+| `i`       | Toggle tool input visibility              |
+| `o`       | Toggle tool output visibility             |
+| `a`       | Toggle auto-scroll                        |
+| `h`       | Hide/show tree pane                       |
+| `A`       | Toggle auto-discovery of new sessions     |
+| `tab`     | Switch focus between tree and stream      |
+| `j/k/↑/↓` | Navigate tree or scroll stream            |
+| `space`   | Toggle selected item in tree              |
+| `enter`   | Load background task output (when selected)|
+| `x/d`     | Remove selected session from tree         |
+| `g/G`     | Go to top/bottom of stream                |
+| `q`       | Quit                                      |
 
 ## How It Works
 
@@ -100,12 +102,19 @@ Subagents are stored in:
 ~/.claude/projects/<project-path>/<session-id>/subagents/agent-<id>.jsonl
 ```
 
+Background task outputs are stored in:
+
+```
+~/.claude/projects/<project-path>/<session-id>/tool-results/toolu_*.txt
+```
+
 The watcher:
 
 1. Discovers active sessions (modified in last 5 minutes)
 2. Polls JSONL files every 500ms for new content
 3. Parses JSON lines and extracts thinking/tool_use/tool_result
-4. Renders them in a TUI with tree navigation and filtering
+4. Discovers background tasks and correlates them with spawning agents
+5. Renders them in a TUI with tree navigation and filtering
 
 ## tmux Setup
 
