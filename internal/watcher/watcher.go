@@ -26,6 +26,8 @@ const (
 	// AutoSkipLineThreshold is the total line count above which we auto-skip history
 	// Each JSONL line is roughly one API turn; 100 lines ≈ 50 conversation exchanges
 	AutoSkipLineThreshold = 100
+	// KeepRecentLines is how many recent lines to show when auto-skipping
+	KeepRecentLines = 10
 )
 
 // isMainSessionFile returns true if the path is a main session JSONL file
@@ -442,19 +444,49 @@ func countFileLines(path string) int {
 }
 
 func (w *Watcher) skipToEndOfFiles(session *Session) {
-	// Set position to end of main file
-	if info, err := os.Stat(session.MainFile); err == nil {
-		w.filePositions[session.MainFile] = info.Size()
-	}
+	// Set position to near end of main file, keeping last N lines
+	w.filePositions[session.MainFile] = findPositionForLastNLines(session.MainFile, KeepRecentLines)
 
-	// Set position to end of all subagent files
+	// Set position to near end of all subagent files
 	session.mu.RLock()
 	for _, path := range session.Subagents {
-		if info, err := os.Stat(path); err == nil {
-			w.filePositions[path] = info.Size()
-		}
+		w.filePositions[path] = findPositionForLastNLines(path, KeepRecentLines)
 	}
 	session.mu.RUnlock()
+}
+
+// findPositionForLastNLines returns the byte offset to start reading the last N lines
+func findPositionForLastNLines(path string, n int) int64 {
+	file, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer file.Close()
+
+	// Collect positions of all newlines
+	var newlinePositions []int64
+	var pos int64
+	buf := make([]byte, 32*1024)
+	for {
+		bytesRead, err := file.Read(buf)
+		for i := 0; i < bytesRead; i++ {
+			if buf[i] == '\n' {
+				newlinePositions = append(newlinePositions, pos+int64(i)+1)
+			}
+		}
+		pos += int64(bytesRead)
+		if err != nil {
+			break
+		}
+	}
+
+	// If fewer than N lines, start from beginning
+	if len(newlinePositions) <= n {
+		return 0
+	}
+
+	// Return position after the newline that's N lines from the end
+	return newlinePositions[len(newlinePositions)-n]
 }
 
 func (w *Watcher) readSessionFiles(session *Session) {
