@@ -44,6 +44,7 @@ claude
 | Option    | Description                                   |
 | --------- | --------------------------------------------- |
 | `-s <ID>` | Watch a specific session by ID                |
+| `-n`      | Start from newest (skip history, live only)   |
 | `-l`      | List recent sessions                          |
 | `-a`      | List active sessions (modified in last 5 min) |
 | `-v`      | Show version                                  |
@@ -54,6 +55,9 @@ claude
 ```bash
 # Watch all active sessions
 ./claude-esp
+
+# Skip history, only show new output
+./claude-esp -n
 
 # List active sessions
 ./claude-esp -a
@@ -67,18 +71,20 @@ claude
 
 ## Keybindings
 
-| Key     | Action                               |
-| ------- | ------------------------------------ |
-| `t`     | Toggle thinking visibility           |
-| `i`     | Toggle tool input visibility         |
-| `o`     | Toggle tool output visibility        |
-| `a`     | Toggle auto-scroll                   |
-| `h`     | Hide/show tree pane                  |
-| `tab`   | Switch focus between tree and stream |
-| `j/k`   | Navigate tree or scroll stream       |
-| `space` | Toggle selected item in tree         |
-| `g/G`   | Go to top/bottom of stream           |
-| `q`     | Quit                                 |
+| Key       | Action                               |
+| --------- | ------------------------------------ |
+| `t`       | Toggle thinking visibility           |
+| `i`       | Toggle tool input visibility         |
+| `o`       | Toggle tool output visibility        |
+| `a`       | Toggle auto-scroll                   |
+| `h`       | Hide/show tree pane                  |
+| `A`       | Toggle auto-discovery of new sessions|
+| `tab`     | Switch focus between tree and stream |
+| `j/k/↑/↓` | Navigate tree or scroll stream       |
+| `space`   | Toggle selected item in tree         |
+| `x/d`     | Remove selected session from tree    |
+| `g/G`     | Go to top/bottom of stream           |
+| `q`       | Quit                                 |
 
 ## How It Works
 
