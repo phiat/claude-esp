@@ -7,8 +7,8 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/phiat/claude-watch/internal/tui"
-	"github.com/phiat/claude-watch/internal/watcher"
+	"github.com/phiat/claude-esp/internal/tui"
+	"github.com/phiat/claude-esp/internal/watcher"
 )
 
 var (
@@ -31,7 +31,7 @@ func main() {
 	}
 
 	if *showVersion {
-		fmt.Printf("claude-watch v%s\n", version)
+		fmt.Printf("claude-esp v%s\n", version)
 		return
 	}
 
@@ -94,13 +94,13 @@ func truncatePath(s string, max int) string {
 }
 
 func printHelp() {
-	fmt.Printf(`claude-watch v%s
+	fmt.Printf(`claude-esp v%s
 
 Stream Claude Code's hidden output (thinking, tool calls, subagents)
 to a separate terminal.
 
 USAGE:
-    claude-watch [OPTIONS]
+    claude-esp [OPTIONS]
 
 OPTIONS:
     -s <ID>     Watch a specific session by ID
@@ -126,7 +126,7 @@ USAGE:
     claude
 
     # In another terminal, run the watcher
-    claude-watch
+    claude-esp
 
 The watcher will automatically find the most recent active session.
 `, version)

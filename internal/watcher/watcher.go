@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/phiat/claude-watch/internal/parser"
+	"github.com/phiat/claude-esp/internal/parser"
 )
 
 // Session represents a Claude Code session with its files

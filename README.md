@@ -1,4 +1,4 @@
-# claude-watch
+# claude-esp
 
 Stream Claude Code's hidden output (thinking, tool calls, subagents) to a separate terminal in real-time.
 
@@ -19,12 +19,12 @@ When using Claude Code interactively, tool outputs and thinking are collapsed by
 
 ```bash
 # Clone and build
-git clone https://github.com/phiat/claude-watch.git
-cd claude-watch
-go build -o claude-watch .
+git clone https://github.com/phiat/claude-esp.git
+cd claude-esp
+go build -o claude-esp .
 
 # Optional: install to PATH
-cp claude-watch ~/.local/bin/
+cp claude-esp ~/.local/bin/
 ```
 
 ## Usage
@@ -34,7 +34,7 @@ cp claude-watch ~/.local/bin/
 claude
 
 # In a second terminal/tmux pane: run the watcher
-./claude-watch
+./claude-esp
 ```
 
 ### Options
@@ -51,16 +51,16 @@ claude
 
 ```bash
 # Watch all active sessions
-./claude-watch
+./claude-esp
 
 # List active sessions
-./claude-watch -a
+./claude-esp -a
 
 # Watch a specific session
-./claude-watch -s 0b773376
+./claude-esp -s 0b773376
 
 # List recent sessions
-./claude-watch -l
+./claude-esp -l
 ```
 
 ## Keybindings
@@ -120,7 +120,7 @@ Recommended tmux layout:
 # Create a new tmux session with two panes
 tmux new-session -s claude \; \
   split-window -h \; \
-  send-keys 'claude-watch' C-m \; \
+  send-keys 'claude-esp' C-m \; \
   select-pane -L \; \
   send-keys 'claude' C-m
 ```
@@ -130,7 +130,7 @@ Or add to your `.tmux.conf`:
 bind-key C-c new-window -n claude \; \
   send-keys 'claude' C-m \; \
   split-window -h \; \
-  send-keys 'claude-watch' C-m \; \
+  send-keys 'claude-esp' C-m \; \
   select-pane -L
 ```
 
@@ -139,7 +139,7 @@ Then press `prefix + Ctrl+C` to open a Claude Code workspace.
 ## Project Structure
 
 ```
-claude-watch/
+claude-esp/
 ├── main.go                 # CLI entry point
 ├── internal/
 │   ├── parser/

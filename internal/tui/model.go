@@ -7,8 +7,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/phiat/claude-watch/internal/parser"
-	"github.com/phiat/claude-watch/internal/watcher"
+	"github.com/phiat/claude-esp/internal/parser"
+	"github.com/phiat/claude-esp/internal/watcher"
 )
 
 // Focus indicates which pane has focus

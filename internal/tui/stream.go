@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
-	"github.com/phiat/claude-watch/internal/parser"
+	"github.com/phiat/claude-esp/internal/parser"
 )
 
 // StreamView displays the stacked stream of items

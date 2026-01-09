@@ -1,4 +1,4 @@
-module github.com/phiat/claude-watch
+module github.com/phiat/claude-esp
 
 go 1.24.4
 
