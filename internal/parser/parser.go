@@ -91,7 +91,10 @@ func ParseLine(line string) ([]StreamItem, error) {
 		return nil, fmt.Errorf("failed to parse JSON: %w", err)
 	}
 
-	timestamp, _ := time.Parse(time.RFC3339, raw.Timestamp)
+	timestamp, err := time.Parse(time.RFC3339, raw.Timestamp)
+	if err != nil {
+		timestamp = time.Now() // fallback to current time if parse fails
+	}
 
 	var items []StreamItem
 
@@ -114,7 +117,7 @@ func parseAssistantMessage(raw RawMessage, timestamp time.Time) []StreamItem {
 	var items []StreamItem
 	agentName := "Main"
 	if raw.AgentID != "" {
-		agentName = fmt.Sprintf("Agent-%s", raw.AgentID[:7])
+		agentName = fmt.Sprintf("Agent-%s", raw.AgentID[:min(7, len(raw.AgentID))])
 	}
 
 	for _, block := range msg.Content {
@@ -168,7 +171,7 @@ func parseUserMessage(raw RawMessage, timestamp time.Time) []StreamItem {
 	var items []StreamItem
 	agentName := "Main"
 	if raw.AgentID != "" {
-		agentName = fmt.Sprintf("Agent-%s", raw.AgentID[:7])
+		agentName = fmt.Sprintf("Agent-%s", raw.AgentID[:min(7, len(raw.AgentID))])
 	}
 
 	for _, result := range results {
@@ -189,7 +192,10 @@ func parseUserMessage(raw RawMessage, timestamp time.Time) []StreamItem {
 
 func formatToolInput(toolName string, inputRaw json.RawMessage) string {
 	var input ToolInput
-	json.Unmarshal(inputRaw, &input)
+	if err := json.Unmarshal(inputRaw, &input); err != nil {
+		// Return raw JSON if we can't parse the input
+		return string(inputRaw)
+	}
 
 	switch toolName {
 	case "Bash":

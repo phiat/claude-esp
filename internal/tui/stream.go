@@ -221,8 +221,9 @@ func (s *StreamView) truncateContent(content string, width int) string {
 
 	// Truncate number of lines
 	if len(lines) > s.maxLines {
+		remaining := len(lines) - s.maxLines
 		lines = lines[:s.maxLines]
-		lines = append(lines, mutedStyle.Render(fmt.Sprintf("... (%d more lines)", len(lines)-s.maxLines)))
+		lines = append(lines, mutedStyle.Render(fmt.Sprintf("... (%d more lines)", remaining)))
 	}
 
 	// Word wrap each line

@@ -235,6 +235,9 @@ func (w *Watcher) watchLoop() {
 	ticker := time.NewTicker(w.pollInterval)
 	defer ticker.Stop()
 
+	cleanupTicker := time.NewTicker(5 * time.Minute)
+	defer cleanupTicker.Stop()
+
 	// Initial read of all sessions
 	w.sessionsMu.RLock()
 	sessions := make([]*Session, 0, len(w.sessions))
@@ -251,6 +254,8 @@ func (w *Watcher) watchLoop() {
 		select {
 		case <-w.stopCh:
 			return
+		case <-cleanupTicker.C:
+			w.cleanupFilePositions()
 		case <-ticker.C:
 			// Check for new active sessions if watching all
 			if w.watchActive {
@@ -423,6 +428,15 @@ func (w *Watcher) readFile(path string, sessionID string, agentID string) {
 	// Update position
 	newPos, _ := file.Seek(0, 1)
 	w.filePositions[path] = newPos
+}
+
+// cleanupFilePositions removes entries for files that no longer exist
+func (w *Watcher) cleanupFilePositions() {
+	for path := range w.filePositions {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			delete(w.filePositions, path)
+		}
+	}
 }
 
 // ListSessions returns recent sessions
