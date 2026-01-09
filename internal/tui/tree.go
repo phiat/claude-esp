@@ -22,6 +22,7 @@ type TreeNode struct {
 	SessionID string // which session this belongs to (for main/agent nodes)
 	Name      string
 	Enabled   bool
+	IsActive  bool // whether this node has recent activity (for main/agent nodes)
 	Children  []*TreeNode
 	Parent    *TreeNode
 }
@@ -69,11 +70,12 @@ func (t *TreeView) AddSession(sessionID, projectPath string) *TreeNode {
 	}
 
 	session := &TreeNode{
-		Type:    NodeTypeSession,
-		ID:      sessionID,
-		Name:    displayName,
-		Enabled: true,
-		Parent:  t.Root,
+		Type:     NodeTypeSession,
+		ID:       sessionID,
+		Name:     displayName,
+		Enabled:  true,
+		IsActive: true,
+		Parent:   t.Root,
 	}
 
 	// Add Main node under the session
@@ -82,6 +84,7 @@ func (t *TreeView) AddSession(sessionID, projectPath string) *TreeNode {
 		SessionID: sessionID,
 		Name:      "Main",
 		Enabled:   true,
+		IsActive:  true,
 		Parent:    session,
 	}
 	session.Children = append(session.Children, main)
@@ -119,6 +122,7 @@ func (t *TreeView) AddAgent(sessionID, agentID string) {
 		SessionID: sessionID,
 		Name:      fmt.Sprintf("Agent-%s", agentID[:min(7, len(agentID))]),
 		Enabled:   true,
+		IsActive:  true,
 		Parent:    session,
 	}
 	session.Children = append(session.Children, node)
@@ -198,6 +202,67 @@ func (t *TreeView) RemoveSession(sessionID string) {
 		}
 	}
 	t.rebuildNodeList()
+}
+
+// UpdateActivity updates the active status of nodes and re-sorts them
+func (t *TreeView) UpdateActivity(sessionID, agentID string, isActive bool) {
+	// Find the session
+	for _, session := range t.Root.Children {
+		if session.Type != NodeTypeSession || session.ID != sessionID {
+			continue
+		}
+
+		// Update session's active status based on any active children
+		sessionHasActive := false
+
+		for _, child := range session.Children {
+			if child.Type == NodeTypeMain && agentID == "" {
+				child.IsActive = isActive
+			} else if child.Type == NodeTypeAgent && child.ID == agentID {
+				child.IsActive = isActive
+			}
+			if child.IsActive {
+				sessionHasActive = true
+			}
+		}
+		session.IsActive = sessionHasActive
+
+		// Sort children: active first, then by name
+		t.sortChildren(session)
+		break
+	}
+
+	// Sort sessions: active first
+	t.sortChildren(t.Root)
+	t.rebuildNodeList()
+}
+
+// sortChildren sorts a node's children with active nodes first
+func (t *TreeView) sortChildren(parent *TreeNode) {
+	if len(parent.Children) <= 1 {
+		return
+	}
+
+	// Stable sort: active first, preserve relative order otherwise
+	// Keep Main always first within a session
+	for i := 1; i < len(parent.Children); i++ {
+		for j := i; j > 0; j-- {
+			curr := parent.Children[j]
+			prev := parent.Children[j-1]
+
+			// Main always stays first
+			if prev.Type == NodeTypeMain {
+				break
+			}
+
+			// Active nodes bubble up (but not past Main)
+			if curr.IsActive && !prev.IsActive {
+				parent.Children[j], parent.Children[j-1] = parent.Children[j-1], parent.Children[j]
+			} else {
+				break
+			}
+		}
+	}
 }
 
 // EnabledFilter represents which sessions/agents are enabled
@@ -285,29 +350,49 @@ func (t *TreeView) View() string {
 			}
 		}
 
-		// Icon based on node type
+		// Icon based on node type and activity
 		icon := ""
 		switch node.Type {
 		case NodeTypeSession:
-			icon = "📁 "
+			if node.IsActive {
+				icon = "📁 "
+			} else {
+				icon = "📂 "
+			}
 		case NodeTypeMain:
-			icon = "💬 "
+			if node.IsActive {
+				icon = "💬 "
+			} else {
+				icon = "💤 "
+			}
 		case NodeTypeAgent:
-			icon = "🤖 "
+			if node.IsActive {
+				icon = "🤖 "
+			} else {
+				icon = "💤 "
+			}
 		}
 
-		// Build line
+		// Build line with name (muted if inactive)
+		name := node.Name
+		if !node.IsActive && node.Type != NodeTypeSession {
+			name = mutedStyle.Render(node.Name)
+		}
+
 		line := fmt.Sprintf("%s%s%s %s%s",
 			indent,
 			branch,
 			checkStyle.Render(checkbox),
 			icon,
-			node.Name,
+			name,
 		)
 
 		// Apply selection style
 		if i == t.cursor {
 			line = treeSelectedStyle.Render(line)
+		} else if !node.IsActive && node.Type != NodeTypeSession {
+			// Keep inactive agents muted even without selection
+			line = mutedStyle.Render(line)
 		} else {
 			line = treeNormalStyle.Render(line)
 		}

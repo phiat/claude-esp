@@ -273,6 +273,49 @@ func (w *Watcher) IsAutoDiscoveryEnabled() bool {
 	return w.watchActive
 }
 
+// ActivityInfo contains activity status for a session/agent
+type ActivityInfo struct {
+	SessionID string
+	AgentID   string // empty for main
+	IsActive  bool
+}
+
+// GetActivityInfo returns activity status for all watched sessions and agents
+// An agent is considered active if its file was modified within the given duration
+func (w *Watcher) GetActivityInfo(activeWithin time.Duration) []ActivityInfo {
+	var info []ActivityInfo
+	now := time.Now()
+
+	w.sessionsMu.RLock()
+	defer w.sessionsMu.RUnlock()
+
+	for _, session := range w.sessions {
+		// Check main file
+		if fi, err := os.Stat(session.MainFile); err == nil {
+			info = append(info, ActivityInfo{
+				SessionID: session.ID,
+				AgentID:   "",
+				IsActive:  now.Sub(fi.ModTime()) < activeWithin,
+			})
+		}
+
+		// Check subagent files
+		session.mu.RLock()
+		for agentID, path := range session.Subagents {
+			if fi, err := os.Stat(path); err == nil {
+				info = append(info, ActivityInfo{
+					SessionID: session.ID,
+					AgentID:   agentID,
+					IsActive:  now.Sub(fi.ModTime()) < activeWithin,
+				})
+			}
+		}
+		session.mu.RUnlock()
+	}
+
+	return info
+}
+
 // Start begins watching for new content
 func (w *Watcher) Start() {
 	go w.watchLoop()

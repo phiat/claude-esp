@@ -118,6 +118,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		cmds = append(cmds, m.tick())
 		cmds = append(cmds, m.pollWatcher())
+		m.updateActivityStatus()
 
 	case streamItemMsg:
 		m.stream.AddItem(parser.StreamItem(msg))
@@ -245,6 +246,16 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	}
 
 	return nil
+}
+
+func (m *Model) updateActivityStatus() {
+	if m.watcher == nil {
+		return
+	}
+	// Check activity within last 30 seconds
+	for _, info := range m.watcher.GetActivityInfo(30 * time.Second) {
+		m.tree.UpdateActivity(info.SessionID, info.AgentID, info.IsActive)
+	}
 }
 
 func (m *Model) updateLayout() {
