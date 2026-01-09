@@ -20,6 +20,7 @@ func main() {
 	sessionID := flag.String("s", "", "Watch a specific session by ID")
 	listSessions := flag.Bool("l", false, "List recent sessions")
 	listActive := flag.Bool("a", false, "List active sessions (modified in last 5 min)")
+	skipHistory := flag.Bool("n", false, "Start from newest (skip history, live only)")
 	showVersion := flag.Bool("v", false, "Show version")
 	showHelp := flag.Bool("h", false, "Show help")
 
@@ -74,7 +75,7 @@ func main() {
 	}
 
 	// Run TUI
-	model := tui.NewModel(*sessionID)
+	model := tui.NewModel(*sessionID, *skipHistory)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
@@ -106,6 +107,7 @@ OPTIONS:
     -s <ID>     Watch a specific session by ID
     -l          List recent sessions
     -a          List active sessions (modified in last 5 min)
+    -n          Start from newest (skip history, live only)
     -v          Show version
     -h          Show this help
 

@@ -21,28 +21,30 @@ const (
 
 // Model is the main TUI model
 type Model struct {
-	tree      *TreeView
-	stream    *StreamView
-	watcher   *watcher.Watcher
-	focus     Focus
-	showTree  bool
-	width     int
-	height    int
-	treeWidth int
-	sessionID string
-	err       error
-	quitting  bool
+	tree        *TreeView
+	stream      *StreamView
+	watcher     *watcher.Watcher
+	focus       Focus
+	showTree    bool
+	width       int
+	height      int
+	treeWidth   int
+	sessionID   string
+	skipHistory bool
+	err         error
+	quitting    bool
 }
 
 // NewModel creates a new TUI model
-func NewModel(sessionID string) *Model {
+func NewModel(sessionID string, skipHistory bool) *Model {
 	return &Model{
-		tree:      NewTreeView(),
-		stream:    NewStreamView(),
-		focus:     FocusStream,
-		showTree:  true,
-		treeWidth: 25,
-		sessionID: sessionID,
+		tree:        NewTreeView(),
+		stream:      NewStreamView(),
+		focus:       FocusStream,
+		showTree:    true,
+		treeWidth:   25,
+		sessionID:   sessionID,
+		skipHistory: skipHistory,
 	}
 }
 
@@ -71,6 +73,11 @@ func (m *Model) initWatcher() tea.Cmd {
 			return errMsg(err)
 		}
 		m.watcher = w
+
+		// Configure skip history before starting
+		if m.skipHistory {
+			w.SetSkipHistory(true)
+		}
 
 		// Add all sessions and their agents to the tree
 		for _, session := range w.GetSessions() {

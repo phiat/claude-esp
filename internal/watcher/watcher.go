@@ -2,6 +2,7 @@ package watcher
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,36 @@ import (
 
 	"github.com/phiat/claude-esp/internal/parser"
 )
+
+const (
+	// DefaultPollInterval is how often to check for new content
+	DefaultPollInterval = 500 * time.Millisecond
+	// DefaultActiveWindow is how recent a session must be modified to be considered active
+	DefaultActiveWindow = 5 * time.Minute
+	// ItemChannelBuffer is the buffer size for the Items channel
+	ItemChannelBuffer = 100
+	// ErrorChannelBuffer is the buffer size for error channels
+	ErrorChannelBuffer = 10
+)
+
+// isMainSessionFile returns true if the path is a main session JSONL file
+// (not a subagent file, not a directory)
+func isMainSessionFile(path string, info os.FileInfo) bool {
+	if info.IsDir() {
+		return false
+	}
+	if !strings.HasSuffix(path, ".jsonl") {
+		return false
+	}
+	if strings.Contains(path, "/subagents/") {
+		return false
+	}
+	basename := filepath.Base(path)
+	if strings.HasPrefix(basename, "agent-") {
+		return false
+	}
+	return true
+}
 
 // Session represents a Claude Code session with its files
 type Session struct {
@@ -45,9 +76,11 @@ type Watcher struct {
 	Errors         chan error
 	NewAgent       chan NewAgentMsg
 	NewSession     chan NewSessionMsg
-	stopCh         chan struct{}
+	ctx            context.Context
+	cancel         context.CancelFunc
 	watchActive    bool          // if true, only watch recently modified sessions
 	activeWindow   time.Duration // how recent is "active"
+	skipHistory    bool          // if true, start from end of files (live only)
 }
 
 // New creates a new watcher for active sessions
@@ -58,19 +91,21 @@ func New(sessionID string) (*Watcher, error) {
 	}
 
 	claudeDir := filepath.Join(homeDir, ".claude", "projects")
+	ctx, cancel := context.WithCancel(context.Background())
 
 	w := &Watcher{
 		claudeDir:     claudeDir,
-		pollInterval:  500 * time.Millisecond,
+		pollInterval:  DefaultPollInterval,
 		sessions:      make(map[string]*Session),
 		filePositions: make(map[string]int64),
-		Items:         make(chan parser.StreamItem, 100),
-		Errors:        make(chan error, 10),
-		NewAgent:      make(chan NewAgentMsg, 10),
-		NewSession:    make(chan NewSessionMsg, 10),
-		stopCh:        make(chan struct{}),
+		Items:         make(chan parser.StreamItem, ItemChannelBuffer),
+		Errors:        make(chan error, ErrorChannelBuffer),
+		NewAgent:      make(chan NewAgentMsg, ErrorChannelBuffer),
+		NewSession:    make(chan NewSessionMsg, ErrorChannelBuffer),
+		ctx:           ctx,
+		cancel:        cancel,
 		watchActive:   sessionID == "", // watch all active if no specific session
-		activeWindow:  5 * time.Minute,
+		activeWindow:  DefaultActiveWindow,
 	}
 
 	if sessionID != "" {
@@ -111,11 +146,7 @@ func (w *Watcher) findSession(sessionID string) (*Session, error) {
 		if err != nil {
 			return nil // skip errors
 		}
-		basename := filepath.Base(path)
-		if !info.IsDir() &&
-			strings.HasSuffix(path, ".jsonl") &&
-			!strings.Contains(path, "/subagents/") &&
-			!strings.HasPrefix(basename, "agent-") {
+		if isMainSessionFile(path, info) {
 			jsonlFiles = append(jsonlFiles, path)
 		}
 		return nil
@@ -164,9 +195,7 @@ func (w *Watcher) buildSession(mainFile string) (*Session, error) {
 	// Extract project path from parent directory name
 	projectDir := filepath.Base(filepath.Dir(mainFile))
 	projectPath := strings.ReplaceAll(projectDir, "-", "/")
-	if strings.HasPrefix(projectPath, "/") {
-		projectPath = projectPath[1:]
-	}
+	projectPath = strings.TrimPrefix(projectPath, "/")
 
 	session := &Session{
 		ID:          id,
@@ -196,11 +225,7 @@ func (w *Watcher) discoverActiveSessions() error {
 		if err != nil {
 			return nil
 		}
-		basename := filepath.Base(path)
-		if info.IsDir() ||
-			!strings.HasSuffix(path, ".jsonl") ||
-			strings.Contains(path, "/subagents/") ||
-			strings.HasPrefix(basename, "agent-") {
+		if !isMainSessionFile(path, info) {
 			return nil
 		}
 
@@ -221,6 +246,11 @@ func (w *Watcher) discoverActiveSessions() error {
 	return err
 }
 
+// SetSkipHistory configures the watcher to start from the end of files
+func (w *Watcher) SetSkipHistory(skip bool) {
+	w.skipHistory = skip
+}
+
 // Start begins watching for new content
 func (w *Watcher) Start() {
 	go w.watchLoop()
@@ -228,7 +258,7 @@ func (w *Watcher) Start() {
 
 // Stop stops the watcher
 func (w *Watcher) Stop() {
-	close(w.stopCh)
+	w.cancel()
 }
 
 func (w *Watcher) watchLoop() {
@@ -246,13 +276,20 @@ func (w *Watcher) watchLoop() {
 	}
 	w.sessionsMu.RUnlock()
 
-	for _, session := range sessions {
-		w.readSessionFiles(session)
+	// If skipHistory is set, initialize file positions to current file sizes
+	if w.skipHistory {
+		for _, session := range sessions {
+			w.skipToEndOfFiles(session)
+		}
+	} else {
+		for _, session := range sessions {
+			w.readSessionFiles(session)
+		}
 	}
 
 	for {
 		select {
-		case <-w.stopCh:
+		case <-w.ctx.Done():
 			return
 		case <-cleanupTicker.C:
 			w.cleanupFilePositions()
@@ -286,11 +323,7 @@ func (w *Watcher) checkForNewSessions() {
 		if err != nil {
 			return nil
 		}
-		basename := filepath.Base(path)
-		if info.IsDir() ||
-			!strings.HasSuffix(path, ".jsonl") ||
-			strings.Contains(path, "/subagents/") ||
-			strings.HasPrefix(basename, "agent-") {
+		if !isMainSessionFile(path, info) {
 			return nil
 		}
 
@@ -299,6 +332,7 @@ func (w *Watcher) checkForNewSessions() {
 			return nil
 		}
 
+		basename := filepath.Base(path)
 		id := strings.TrimSuffix(basename, ".jsonl")
 
 		// Check if session exists (read lock)
@@ -360,6 +394,22 @@ func (w *Watcher) checkForNewSubagents(session *Session) {
 	}
 }
 
+func (w *Watcher) skipToEndOfFiles(session *Session) {
+	// Set position to end of main file
+	if info, err := os.Stat(session.MainFile); err == nil {
+		w.filePositions[session.MainFile] = info.Size()
+	}
+
+	// Set position to end of all subagent files
+	session.mu.RLock()
+	for _, path := range session.Subagents {
+		if info, err := os.Stat(path); err == nil {
+			w.filePositions[path] = info.Size()
+		}
+	}
+	session.mu.RUnlock()
+}
+
 func (w *Watcher) readSessionFiles(session *Session) {
 	// Read main file
 	w.readFile(session.MainFile, session.ID, "")
@@ -419,7 +469,7 @@ func (w *Watcher) readFile(path string, sessionID string, agentID string) {
 
 			select {
 			case w.Items <- item:
-			case <-w.stopCh:
+			case <-w.ctx.Done():
 				return
 			}
 		}
@@ -463,12 +513,7 @@ func listSessionsFiltered(limit int, activeWithin time.Duration) ([]SessionInfo,
 		if err != nil {
 			return nil
 		}
-		basename := filepath.Base(path)
-		// Skip directories, non-jsonl files, subagent files, and agent-prefixed files
-		if info.IsDir() ||
-			!strings.HasSuffix(path, ".jsonl") ||
-			strings.Contains(path, "/subagents/") ||
-			strings.HasPrefix(basename, "agent-") {
+		if !isMainSessionFile(path, info) {
 			return nil
 		}
 
@@ -478,11 +523,10 @@ func listSessionsFiltered(limit int, activeWithin time.Duration) ([]SessionInfo,
 		}
 
 		// Extract project path from parent directory name
+		basename := filepath.Base(path)
 		projectDir := filepath.Base(filepath.Dir(path))
 		projectPath := strings.ReplaceAll(projectDir, "-", "/")
-		if strings.HasPrefix(projectPath, "/") {
-			projectPath = projectPath[1:] // remove leading slash
-		}
+		projectPath = strings.TrimPrefix(projectPath, "/")
 
 		sessions = append(sessions, SessionInfo{
 			ID:          strings.TrimSuffix(basename, ".jsonl"),

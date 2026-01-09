@@ -8,6 +8,13 @@ import (
 	"github.com/phiat/claude-esp/internal/parser"
 )
 
+const (
+	// MaxStreamItems is the maximum number of items to keep in the stream
+	MaxStreamItems = 1000
+	// MaxLinesPerItem is the maximum lines to display per stream item
+	MaxLinesPerItem = 50
+)
+
 // StreamView displays the stacked stream of items
 type StreamView struct {
 	viewport     viewport.Model
@@ -34,7 +41,7 @@ func NewStreamView() *StreamView {
 		viewport:       vp,
 		items:          make([]parser.StreamItem, 0),
 		autoScroll:     true,
-		maxLines:       50,
+		maxLines:       MaxLinesPerItem,
 		showThinking:   true,
 		showToolInput:  true,
 		showToolOutput: true,
@@ -55,9 +62,9 @@ func (s *StreamView) SetSize(width, height int) {
 // AddItem adds a new item to the stream
 func (s *StreamView) AddItem(item parser.StreamItem) {
 	s.items = append(s.items, item)
-	// Keep last 1000 items to prevent memory issues
-	if len(s.items) > 1000 {
-		s.items = s.items[len(s.items)-1000:]
+	// Keep last MaxStreamItems items to prevent memory issues
+	if len(s.items) > MaxStreamItems {
+		s.items = s.items[len(s.items)-MaxStreamItems:]
 	}
 	s.updateContent()
 }
