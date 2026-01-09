@@ -23,9 +23,9 @@ const (
 	ItemChannelBuffer = 100
 	// ErrorChannelBuffer is the buffer size for error channels
 	ErrorChannelBuffer = 10
-	// AutoSkipThreshold is the total file size above which we auto-skip history
-	// ~30KB of JSONL roughly equals 3 panes of rendered content
-	AutoSkipThreshold = 30 * 1024
+	// AutoSkipLineThreshold is the total line count above which we auto-skip history
+	// Each JSONL line is roughly one API turn; 100 lines ≈ 50 conversation exchanges
+	AutoSkipLineThreshold = 100
 )
 
 // isMainSessionFile returns true if the path is a main session JSONL file
@@ -282,9 +282,9 @@ func (w *Watcher) watchLoop() {
 	// Determine whether to skip history
 	shouldSkip := w.skipHistory
 	if !shouldSkip {
-		// Auto-skip if total file size exceeds threshold
-		totalSize := w.calculateTotalFileSize(sessions)
-		shouldSkip = totalSize > AutoSkipThreshold
+		// Auto-skip if total line count exceeds threshold
+		totalLines := w.countTotalLines(sessions)
+		shouldSkip = totalLines > AutoSkipLineThreshold
 	}
 
 	if shouldSkip {
@@ -404,21 +404,41 @@ func (w *Watcher) checkForNewSubagents(session *Session) {
 	}
 }
 
-func (w *Watcher) calculateTotalFileSize(sessions []*Session) int64 {
-	var total int64
+func (w *Watcher) countTotalLines(sessions []*Session) int {
+	var total int
 	for _, session := range sessions {
-		if info, err := os.Stat(session.MainFile); err == nil {
-			total += info.Size()
-		}
+		total += countFileLines(session.MainFile)
 		session.mu.RLock()
 		for _, path := range session.Subagents {
-			if info, err := os.Stat(path); err == nil {
-				total += info.Size()
-			}
+			total += countFileLines(path)
 		}
 		session.mu.RUnlock()
 	}
 	return total
+}
+
+// countFileLines counts newlines in a file without parsing content
+func countFileLines(path string) int {
+	file, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer file.Close()
+
+	count := 0
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := file.Read(buf)
+		for i := 0; i < n; i++ {
+			if buf[i] == '\n' {
+				count++
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+	return count
 }
 
 func (w *Watcher) skipToEndOfFiles(session *Session) {
