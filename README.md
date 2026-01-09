@@ -151,7 +151,7 @@ claude-esp/
 
 ## Development
 
-Issue tracking was done with [beads](https://github.com/anthropics/beads).
+Built with [Bubbletea](https://github.com/charmbracelet/bubbletea) and [Lipgloss](https://github.com/charmbracelet/lipgloss). Issue tracking was done with [beads](https://github.com/anthropics/beads).
 
 ## License
 
