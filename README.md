@@ -41,13 +41,13 @@ claude
 
 ### Options
 
-| Option | Description |
-|--------|-------------|
-| `-s <ID>` | Watch a specific session by ID |
-| `-l` | List recent sessions |
-| `-a` | List active sessions (modified in last 5 min) |
-| `-v` | Show version |
-| `-h` | Show help |
+| Option    | Description                                   |
+| --------- | --------------------------------------------- |
+| `-s <ID>` | Watch a specific session by ID                |
+| `-l`      | List recent sessions                          |
+| `-a`      | List active sessions (modified in last 5 min) |
+| `-v`      | Show version                                  |
+| `-h`      | Show help                                     |
 
 ### Examples
 
@@ -67,51 +67,35 @@ claude
 
 ## Keybindings
 
-| Key | Action |
-|-----|--------|
-| `t` | Toggle thinking visibility |
-| `i` | Toggle tool input visibility |
-| `o` | Toggle tool output visibility |
-| `a` | Toggle auto-scroll |
-| `h` | Hide/show tree pane |
-| `tab` | Switch focus between tree and stream |
-| `j/k` | Navigate tree or scroll stream |
-| `space` | Toggle selected item in tree |
-| `g/G` | Go to top/bottom of stream |
-| `q` | Quit |
-
-## TUI Layout
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│ ☑ Thinking[t]  ☑ Tools[i]  ☑ Output[o]  ☑ Auto[a]  │  Session: ... │
-├─────────────┬───────────────────────────────────────────────────────┤
-│ ☑ 📁 esp    │ Main » Thinking                                      │
-│   ├─ 💬 Main│   analyzing the code structure...                    │
-│   └─ 🤖 Sub1│ ──────────────────────────────────────                │
-│ ☑ 📁 other  │ Main » Bash                                          │
-│   └─ 💤 Main│   ls -la /home/user/project                          │
-│             │ ──────────────────────────────────────                │
-│             │ Sub1 » Grep                                           │
-│             │   pattern: "function"                                 │
-├─────────────┴───────────────────────────────────────────────────────┤
-│ j/k: scroll │ g/G: top/bottom │ tab: tree │ q: quit                 │
-└─────────────────────────────────────────────────────────────────────┘
-```
+| Key     | Action                               |
+| ------- | ------------------------------------ |
+| `t`     | Toggle thinking visibility           |
+| `i`     | Toggle tool input visibility         |
+| `o`     | Toggle tool output visibility        |
+| `a`     | Toggle auto-scroll                   |
+| `h`     | Hide/show tree pane                  |
+| `tab`   | Switch focus between tree and stream |
+| `j/k`   | Navigate tree or scroll stream       |
+| `space` | Toggle selected item in tree         |
+| `g/G`   | Go to top/bottom of stream           |
+| `q`     | Quit                                 |
 
 ## How It Works
 
 Claude Code stores conversation transcripts as JSONL files in:
+
 ```
 ~/.claude/projects/<project-path>/<session-id>.jsonl
 ```
 
 Subagents are stored in:
+
 ```
 ~/.claude/projects/<project-path>/<session-id>/subagents/agent-<id>.jsonl
 ```
 
 The watcher:
+
 1. Discovers active sessions (modified in last 5 minutes)
 2. Polls JSONL files every 500ms for new content
 3. Parses JSON lines and extracts thinking/tool_use/tool_result
@@ -131,6 +115,7 @@ tmux new-session -s claude \; \
 ```
 
 Or add to your `.tmux.conf`:
+
 ```
 bind-key C-c new-window -n claude \; \
   send-keys 'claude' C-m \; \
