@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/phiat/claude-watch/internal/parser"
@@ -18,6 +19,7 @@ type Session struct {
 	ProjectPath string
 	MainFile    string
 	Subagents   map[string]string // agentID -> file path
+	mu          sync.RWMutex      // protects Subagents map
 }
 
 // NewAgentMsg signals when a new agent is discovered
@@ -37,7 +39,8 @@ type Watcher struct {
 	claudeDir      string
 	pollInterval   time.Duration
 	sessions       map[string]*Session
-	filePositions  map[string]int64 // track read position per file
+	sessionsMu     sync.RWMutex      // protects sessions map
+	filePositions  map[string]int64  // track read position per file
 	Items          chan parser.StreamItem
 	Errors         chan error
 	NewAgent       chan NewAgentMsg
@@ -87,9 +90,17 @@ func New(sessionID string) (*Watcher, error) {
 	return w, nil
 }
 
-// GetSessions returns all watched sessions
+// GetSessions returns a copy of all watched sessions
 func (w *Watcher) GetSessions() map[string]*Session {
-	return w.sessions
+	w.sessionsMu.RLock()
+	defer w.sessionsMu.RUnlock()
+
+	// Return a copy to avoid race conditions
+	copy := make(map[string]*Session, len(w.sessions))
+	for k, v := range w.sessions {
+		copy[k] = v
+	}
+	return copy
 }
 
 // findSession finds a specific session by ID
@@ -225,7 +236,14 @@ func (w *Watcher) watchLoop() {
 	defer ticker.Stop()
 
 	// Initial read of all sessions
-	for _, session := range w.sessions {
+	w.sessionsMu.RLock()
+	sessions := make([]*Session, 0, len(w.sessions))
+	for _, s := range w.sessions {
+		sessions = append(sessions, s)
+	}
+	w.sessionsMu.RUnlock()
+
+	for _, session := range sessions {
 		w.readSessionFiles(session)
 	}
 
@@ -239,8 +257,16 @@ func (w *Watcher) watchLoop() {
 				w.checkForNewSessions()
 			}
 
+			// Get snapshot of sessions to avoid holding lock during iteration
+			w.sessionsMu.RLock()
+			sessions := make([]*Session, 0, len(w.sessions))
+			for _, s := range w.sessions {
+				sessions = append(sessions, s)
+			}
+			w.sessionsMu.RUnlock()
+
 			// Check for new subagents and read updates
-			for _, session := range w.sessions {
+			for _, session := range sessions {
 				w.checkForNewSubagents(session)
 				w.readSessionFiles(session)
 			}
@@ -269,12 +295,22 @@ func (w *Watcher) checkForNewSessions() {
 		}
 
 		id := strings.TrimSuffix(basename, ".jsonl")
-		if _, exists := w.sessions[id]; !exists {
+
+		// Check if session exists (read lock)
+		w.sessionsMu.RLock()
+		_, exists := w.sessions[id]
+		w.sessionsMu.RUnlock()
+
+		if !exists {
 			session, err := w.buildSession(path)
 			if err != nil {
 				return nil
 			}
+
+			// Add new session (write lock)
+			w.sessionsMu.Lock()
 			w.sessions[session.ID] = session
+			w.sessionsMu.Unlock()
 
 			// Notify about new session
 			select {
@@ -296,9 +332,20 @@ func (w *Watcher) checkForNewSubagents(session *Session) {
 	for _, entry := range entries {
 		if strings.HasSuffix(entry.Name(), ".jsonl") {
 			agentID := strings.TrimPrefix(strings.TrimSuffix(entry.Name(), ".jsonl"), "agent-")
-			if _, exists := session.Subagents[agentID]; !exists {
+
+			// Check if agent exists (read lock)
+			session.mu.RLock()
+			_, exists := session.Subagents[agentID]
+			session.mu.RUnlock()
+
+			if !exists {
 				path := filepath.Join(subagentDir, entry.Name())
+
+				// Add new agent (write lock)
+				session.mu.Lock()
 				session.Subagents[agentID] = path
+				session.mu.Unlock()
+
 				select {
 				case w.NewAgent <- NewAgentMsg{SessionID: session.ID, AgentID: agentID}:
 				default:
@@ -312,8 +359,16 @@ func (w *Watcher) readSessionFiles(session *Session) {
 	// Read main file
 	w.readFile(session.MainFile, session.ID, "")
 
+	// Get snapshot of subagents to avoid holding lock during file reads
+	session.mu.RLock()
+	subagents := make(map[string]string, len(session.Subagents))
+	for k, v := range session.Subagents {
+		subagents[k] = v
+	}
+	session.mu.RUnlock()
+
 	// Read subagent files
-	for agentID, path := range session.Subagents {
+	for agentID, path := range subagents {
 		w.readFile(path, session.ID, agentID)
 	}
 }
