@@ -225,6 +225,23 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		if !m.stream.IsAutoScrollEnabled() {
 			m.stream.ToggleAutoScroll()
 		}
+
+	case "x", "d":
+		// Remove selected session (only when tree is focused)
+		if m.focus == FocusTree && m.watcher != nil {
+			sessionID := m.tree.GetSelectedSession()
+			if sessionID != "" {
+				m.watcher.RemoveSession(sessionID)
+				m.tree.RemoveSession(sessionID)
+				m.stream.SetEnabledFilters(m.tree.GetEnabledFilters())
+			}
+		}
+
+	case "A":
+		// Toggle auto-discovery of new sessions
+		if m.watcher != nil {
+			m.watcher.ToggleAutoDiscovery()
+		}
 	}
 
 	return nil
@@ -291,16 +308,20 @@ func (m *Model) renderHeader() string {
 	toggles := fmt.Sprintf("%s  %s  %s  %s  %s",
 		thinking, toolInput, toolOutput, autoScroll, treeToggle)
 
-	// Session count info
+	// Session count and auto-discovery status
 	sessionInfo := ""
 	if m.watcher != nil {
 		sessions := m.watcher.GetSessions()
+		autoDisc := ""
+		if !m.watcher.IsAutoDiscoveryEnabled() {
+			autoDisc = " [paused]"
+		}
 		if len(sessions) == 1 {
 			for _, s := range sessions {
-				sessionInfo = mutedStyle.Render(fmt.Sprintf("Session: %s", truncate(s.ID, 12)))
+				sessionInfo = mutedStyle.Render(fmt.Sprintf("Session: %s%s", truncate(s.ID, 12), autoDisc))
 			}
 		} else {
-			sessionInfo = mutedStyle.Render(fmt.Sprintf("%d sessions", len(sessions)))
+			sessionInfo = mutedStyle.Render(fmt.Sprintf("%d sessions%s", len(sessions), autoDisc))
 		}
 	}
 
@@ -357,9 +378,9 @@ func (m *Model) renderStreamOnly() string {
 func (m *Model) renderHelp() string {
 	var help string
 	if m.focus == FocusTree {
-		help = "j/k: navigate │ space: toggle │ tab: switch pane │ q: quit"
+		help = "j/k: navigate │ space: toggle │ x: remove │ A: auto-discover │ q: quit"
 	} else {
-		help = "j/k: scroll │ g/G: top/bottom │ tab: switch pane │ q: quit"
+		help = "j/k: scroll │ g/G: top/bottom │ A: auto-discover │ tab: tree │ q: quit"
 	}
 	return helpStyle.Render(help)
 }

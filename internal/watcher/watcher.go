@@ -256,6 +256,23 @@ func (w *Watcher) SetSkipHistory(skip bool) {
 	w.skipHistory = skip
 }
 
+// RemoveSession removes a session from being watched
+func (w *Watcher) RemoveSession(sessionID string) {
+	w.sessionsMu.Lock()
+	delete(w.sessions, sessionID)
+	w.sessionsMu.Unlock()
+}
+
+// ToggleAutoDiscovery toggles automatic discovery of new sessions
+func (w *Watcher) ToggleAutoDiscovery() {
+	w.watchActive = !w.watchActive
+}
+
+// IsAutoDiscoveryEnabled returns whether auto-discovery is enabled
+func (w *Watcher) IsAutoDiscoveryEnabled() bool {
+	return w.watchActive
+}
+
 // Start begins watching for new content
 func (w *Watcher) Start() {
 	go w.watchLoop()

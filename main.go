@@ -117,6 +117,8 @@ KEYBINDINGS:
     o           Toggle tool output visibility
     a           Toggle auto-scroll
     h           Hide/show tree pane
+    A           Toggle auto-discovery of new sessions
+    x/d         Remove selected session (in tree)
     tab         Switch focus between tree and stream
     j/k         Navigate (tree) or scroll (stream)
     space       Toggle agent visibility (in tree)

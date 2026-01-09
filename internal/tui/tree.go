@@ -173,6 +173,33 @@ func (t *TreeView) Toggle() {
 	}
 }
 
+// GetSelectedSession returns the session ID of the currently selected node (or its parent session)
+func (t *TreeView) GetSelectedSession() string {
+	if t.cursor < 0 || t.cursor >= len(t.nodes) {
+		return ""
+	}
+	node := t.nodes[t.cursor]
+	switch node.Type {
+	case NodeTypeSession:
+		return node.ID
+	case NodeTypeMain, NodeTypeAgent:
+		return node.SessionID
+	}
+	return ""
+}
+
+// RemoveSession removes a session and all its children from the tree
+func (t *TreeView) RemoveSession(sessionID string) {
+	// Find and remove the session from root's children
+	for i, child := range t.Root.Children {
+		if child.Type == NodeTypeSession && child.ID == sessionID {
+			t.Root.Children = append(t.Root.Children[:i], t.Root.Children[i+1:]...)
+			break
+		}
+	}
+	t.rebuildNodeList()
+}
+
 // EnabledFilter represents which sessions/agents are enabled
 type EnabledFilter struct {
 	SessionID string
