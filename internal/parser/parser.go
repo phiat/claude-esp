@@ -23,9 +23,9 @@ const (
 // StreamItem represents a single item in the output stream
 type StreamItem struct {
 	Type      StreamItemType
-	SessionID string    // which session this belongs to
-	AgentID   string    // empty for main session, "abc123" for subagents
-	AgentName string    // human-readable name derived from agent type or ID
+	SessionID string // which session this belongs to
+	AgentID   string // empty for main session, "abc123" for subagents
+	AgentName string // human-readable name derived from agent type or ID
 	Timestamp time.Time
 	Content   string
 	ToolName  string // for tool_input/tool_output
@@ -43,8 +43,8 @@ type RawMessage struct {
 
 // AssistantMessage represents the message field for assistant responses
 type AssistantMessage struct {
-	Role    string           `json:"role"`
-	Content []ContentBlock   `json:"content"`
+	Role    string         `json:"role"`
+	Content []ContentBlock `json:"content"`
 }
 
 // ContentBlock represents a single content item in assistant response
@@ -59,8 +59,8 @@ type ContentBlock struct {
 
 // UserMessage represents the message field for user messages (including tool results)
 type UserMessage struct {
-	Role    string        `json:"role"`
-	Content []ToolResult  `json:"content,omitempty"`
+	Role    string       `json:"role"`
+	Content []ToolResult `json:"content,omitempty"`
 }
 
 // ToolResult represents a tool result in a user message

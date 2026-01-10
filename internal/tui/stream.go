@@ -17,13 +17,13 @@ const (
 
 // StreamView displays the stacked stream of items
 type StreamView struct {
-	viewport     viewport.Model
-	items        []parser.StreamItem
-	seenToolIDs  map[string]bool // dedupe tool input/output by ToolID
-	width        int
-	height       int
-	autoScroll   bool
-	maxLines     int // max lines per item
+	viewport    viewport.Model
+	items       []parser.StreamItem
+	seenToolIDs map[string]bool // dedupe tool input/output by ToolID
+	width       int
+	height      int
+	autoScroll  bool
+	maxLines    int // max lines per item
 
 	// Filters
 	showThinking   bool

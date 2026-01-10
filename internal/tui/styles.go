@@ -88,8 +88,8 @@ var (
 			Background(headerBgColor).
 			Foreground(mutedColor)
 	headerMutedStyle = lipgloss.NewStyle().
-			Background(headerBgColor).
-			Foreground(mutedColor)
+				Background(headerBgColor).
+				Foreground(mutedColor)
 
 	// Help bar at bottom
 	helpStyle = lipgloss.NewStyle().

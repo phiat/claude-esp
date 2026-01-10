@@ -148,9 +148,9 @@ type Watcher struct {
 	claudeDir         string
 	pollInterval      time.Duration
 	sessions          map[string]*Session
-	sessionsMu        sync.RWMutex      // protects sessions map
-	filePositions     map[string]int64  // track read position per file
-	filePosMu         sync.RWMutex      // protects filePositions map
+	sessionsMu        sync.RWMutex     // protects sessions map
+	filePositions     map[string]int64 // track read position per file
+	filePosMu         sync.RWMutex     // protects filePositions map
 	Items             chan parser.StreamItem
 	Errors            chan error
 	NewAgent          chan NewAgentMsg

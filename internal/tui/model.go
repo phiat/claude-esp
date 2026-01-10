@@ -51,8 +51,8 @@ func NewModel(sessionID string, skipHistory bool) *Model {
 
 // Messages
 type (
-	tickMsg         time.Time
-	streamItemMsg   parser.StreamItem
+	tickMsg              time.Time
+	streamItemMsg        parser.StreamItem
 	newAgentMsg          watcher.NewAgentMsg
 	newSessionMsg        watcher.NewSessionMsg
 	newBackgroundTaskMsg watcher.NewBackgroundTaskMsg
