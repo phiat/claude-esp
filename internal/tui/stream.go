@@ -257,11 +257,3 @@ func (s *StreamView) truncateContent(content string, width int) string {
 func (s *StreamView) View() string {
 	return s.viewport.View()
 }
-
-// Update handles viewport messages
-func (s *StreamView) Update(msg any) {
-	switch msg := msg.(type) {
-	case viewport.Model:
-		s.viewport = msg
-	}
-}

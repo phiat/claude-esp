@@ -698,6 +698,13 @@ func (w *Watcher) checkForNewSessions() {
 	now := time.Now()
 
 	filepath.Walk(w.claudeDir, func(path string, info os.FileInfo, err error) error {
+		// Check for context cancellation to avoid goroutine leak
+		select {
+		case <-w.ctx.Done():
+			return filepath.SkipAll
+		default:
+		}
+
 		if err != nil {
 			return nil
 		}
@@ -713,27 +720,27 @@ func (w *Watcher) checkForNewSessions() {
 		basename := filepath.Base(path)
 		id := strings.TrimSuffix(basename, ".jsonl")
 
-		// Check if session exists (read lock)
-		w.sessionsMu.RLock()
+		// Check and add with write lock to avoid TOCTOU race
+		w.sessionsMu.Lock()
 		_, exists := w.sessions[id]
-		w.sessionsMu.RUnlock()
-
-		if !exists {
-			session, err := w.buildSession(path)
-			if err != nil {
-				return nil
-			}
-
-			// Add new session (write lock)
-			w.sessionsMu.Lock()
-			w.sessions[session.ID] = session
+		if exists {
 			w.sessionsMu.Unlock()
+			return nil
+		}
 
-			// Notify about new session
-			select {
-			case w.NewSession <- NewSessionMsg{SessionID: session.ID, ProjectPath: session.ProjectPath}:
-			default:
-			}
+		session, err := w.buildSession(path)
+		if err != nil {
+			w.sessionsMu.Unlock()
+			return nil
+		}
+
+		w.sessions[session.ID] = session
+		w.sessionsMu.Unlock()
+
+		// Notify about new session
+		select {
+		case w.NewSession <- NewSessionMsg{SessionID: session.ID, ProjectPath: session.ProjectPath}:
+		default:
 		}
 		return nil
 	})
@@ -749,24 +756,21 @@ func (w *Watcher) checkForNewSubagents(session *Session) {
 	for _, entry := range entries {
 		if strings.HasSuffix(entry.Name(), ".jsonl") {
 			agentID := strings.TrimPrefix(strings.TrimSuffix(entry.Name(), ".jsonl"), "agent-")
+			path := filepath.Join(subagentDir, entry.Name())
 
-			// Check if agent exists (read lock)
-			session.mu.RLock()
+			// Check and add with write lock to avoid TOCTOU race
+			session.mu.Lock()
 			_, exists := session.Subagents[agentID]
-			session.mu.RUnlock()
-
-			if !exists {
-				path := filepath.Join(subagentDir, entry.Name())
-
-				// Add new agent (write lock)
-				session.mu.Lock()
-				session.Subagents[agentID] = path
+			if exists {
 				session.mu.Unlock()
+				continue
+			}
+			session.Subagents[agentID] = path
+			session.mu.Unlock()
 
-				select {
-				case w.NewAgent <- NewAgentMsg{SessionID: session.ID, AgentID: agentID}:
-				default:
-				}
+			select {
+			case w.NewAgent <- NewAgentMsg{SessionID: session.ID, AgentID: agentID}:
+			default:
 			}
 		}
 	}
