@@ -388,8 +388,9 @@ func (m *Model) renderHeader() string {
 	}
 
 	// Build header - use plain text and apply headerStyle uniformly (like Rust version)
+	// Don't use Width() as it causes truncation on narrow terminals
 	headerText := fmt.Sprintf("%s  │  %s", toggles, sessionInfo)
-	header := headerStyle.Width(m.width).Render(headerText)
+	header := headerStyle.Render(headerText)
 
 	return header
 }
