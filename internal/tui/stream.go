@@ -19,6 +19,7 @@ const (
 type StreamView struct {
 	viewport     viewport.Model
 	items        []parser.StreamItem
+	seenToolIDs  map[string]bool // dedupe tool input/output by ToolID
 	width        int
 	height       int
 	autoScroll   bool
@@ -40,6 +41,7 @@ func NewStreamView() *StreamView {
 	return &StreamView{
 		viewport:       vp,
 		items:          make([]parser.StreamItem, 0),
+		seenToolIDs:    make(map[string]bool),
 		autoScroll:     true,
 		maxLines:       MaxLinesPerItem,
 		showThinking:   true,
@@ -61,6 +63,14 @@ func (s *StreamView) SetSize(width, height int) {
 
 // AddItem adds a new item to the stream
 func (s *StreamView) AddItem(item parser.StreamItem) {
+	// Deduplicate tool input/output by ToolID
+	if item.ToolID != "" {
+		if s.seenToolIDs[item.ToolID] {
+			return // Skip duplicate
+		}
+		s.seenToolIDs[item.ToolID] = true
+	}
+
 	s.items = append(s.items, item)
 	// Keep last MaxStreamItems items to prevent memory issues
 	if len(s.items) > MaxStreamItems {
