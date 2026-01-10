@@ -380,29 +380,26 @@ func (m *Model) renderHeader() string {
 		}
 		if len(sessions) == 1 {
 			for _, s := range sessions {
-				sessionInfo = mutedStyle.Render(fmt.Sprintf("Session: %s%s", truncate(s.ID, 12), autoDisc))
+				sessionInfo = fmt.Sprintf("Session: %s%s", truncate(s.ID, 12), autoDisc)
 			}
 		} else {
-			sessionInfo = mutedStyle.Render(fmt.Sprintf("%d sessions%s", len(sessions), autoDisc))
+			sessionInfo = fmt.Sprintf("%d sessions%s", len(sessions), autoDisc)
 		}
 	}
 
-	// Build header
-	header := headerStyle.Width(m.width).Render(
-		fmt.Sprintf("%s  │  %s", toggles, sessionInfo),
-	)
+	// Build header - use plain text and apply headerStyle uniformly (like Rust version)
+	headerText := fmt.Sprintf("%s  │  %s", toggles, sessionInfo)
+	header := headerStyle.Width(m.width).Render(headerText)
 
 	return header
 }
 
 func (m *Model) renderToggle(name string, enabled bool, key string) string {
 	checkbox := "☐"
-	style := toggleOffStyle
 	if enabled {
 		checkbox = "☑"
-		style = toggleOnStyle
 	}
-	return style.Render(fmt.Sprintf("%s %s[%s]", checkbox, name, key))
+	return fmt.Sprintf("%s %s[%s]", checkbox, name, key)
 }
 
 func (m *Model) renderWithTree() string {

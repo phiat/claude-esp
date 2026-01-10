@@ -72,15 +72,23 @@ var (
 				Padding(0, 1)
 
 	// Header/toggle bar
+	headerBgColor = lipgloss.Color("#374151")
+	headerFgColor = lipgloss.Color("#F9FAFB")
+
 	headerStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("#374151")).
-			Foreground(lipgloss.Color("#F9FAFB")).
+			Background(headerBgColor).
+			Foreground(headerFgColor).
 			Padding(0, 1)
 
 	toggleOnStyle = lipgloss.NewStyle().
+			Background(headerBgColor).
 			Foreground(secondaryColor).
 			Bold(true)
 	toggleOffStyle = lipgloss.NewStyle().
+			Background(headerBgColor).
+			Foreground(mutedColor)
+	headerMutedStyle = lipgloss.NewStyle().
+			Background(headerBgColor).
 			Foreground(mutedColor)
 
 	// Help bar at bottom
