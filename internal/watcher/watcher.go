@@ -52,6 +52,37 @@ func getClaudeProjectsDir() (string, error) {
 	return filepath.Join(homeDir, ".claude", "projects"), nil
 }
 
+// resolveProjectPath converts an encoded directory name back to a real path.
+// The encoded name like "-home-user-project-name" needs smart conversion because
+// directory names can contain dashes (e.g., "claude-esp-rs" should not become "claude/esp/rs").
+// We try progressively from right to left to find existing paths.
+func resolveProjectPath(encoded string) string {
+	encoded = strings.TrimPrefix(encoded, "-")
+	if encoded == "" {
+		return ""
+	}
+
+	parts := strings.Split(encoded, "-")
+	if len(parts) == 0 {
+		return encoded
+	}
+
+	// Try progressively joining segments from the right with dashes
+	// to find the actual directory name
+	for joinFrom := len(parts) - 1; joinFrom >= 1; joinFrom-- {
+		pathPart := strings.Join(parts[:joinFrom], "/")
+		dirPart := strings.Join(parts[joinFrom:], "-")
+		testPath := "/" + pathPart + "/" + dirPart
+
+		if _, err := os.Stat(testPath); err == nil {
+			return pathPart + "/" + dirPart
+		}
+	}
+
+	// Fallback to naive conversion
+	return strings.ReplaceAll(encoded, "-", "/")
+}
+
 // isMainSessionFile returns true if the path is a main session JSONL file
 // (not a subagent file, not a directory)
 func isMainSessionFile(path string, info os.FileInfo) bool {
@@ -243,8 +274,7 @@ func (w *Watcher) buildSession(mainFile string) (*Session, error) {
 
 	// Extract project path from parent directory name
 	projectDir := filepath.Base(filepath.Dir(mainFile))
-	projectPath := strings.ReplaceAll(projectDir, "-", "/")
-	projectPath = strings.TrimPrefix(projectPath, "/")
+	projectPath := resolveProjectPath(projectDir)
 
 	session := &Session{
 		ID:              id,
@@ -967,8 +997,7 @@ func listSessionsFiltered(limit int, activeWithin time.Duration) ([]SessionInfo,
 		// Extract project path from parent directory name
 		basename := filepath.Base(path)
 		projectDir := filepath.Base(filepath.Dir(path))
-		projectPath := strings.ReplaceAll(projectDir, "-", "/")
-		projectPath = strings.TrimPrefix(projectPath, "/")
+		projectPath := resolveProjectPath(projectDir)
 
 		sessions = append(sessions, SessionInfo{
 			ID:          strings.TrimSuffix(basename, ".jsonl"),

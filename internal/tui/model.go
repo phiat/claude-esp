@@ -319,7 +319,7 @@ func (m *Model) updateLayout() {
 
 	if m.showTree {
 		m.tree.SetSize(m.treeWidth, contentHeight)
-		m.stream.SetSize(m.width-m.treeWidth-3, contentHeight) // -3 for borders/gap
+		m.stream.SetSize(m.width-m.treeWidth-5, contentHeight) // -5 for borders/padding/gap
 	} else {
 		m.stream.SetSize(m.width-2, contentHeight)
 	}
@@ -422,7 +422,7 @@ func (m *Model) renderWithTree() string {
 		streamBorder = streamBorder.BorderForeground(primaryColor)
 	}
 	streamPane := streamBorder.
-		Width(m.width - m.treeWidth - 3).
+		Width(m.width - m.treeWidth - 5).
 		Height(m.height - 4).
 		Render(m.stream.View())
 
