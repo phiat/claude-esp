@@ -43,8 +43,12 @@ const (
 	RecentActivityThreshold = 2 * time.Minute
 )
 
-// getClaudeProjectsDir returns the path to Claude's projects directory
+// getClaudeProjectsDir returns the path to Claude's projects directory.
+// It checks the CLAUDE_HOME environment variable first, falling back to ~/.claude.
 func getClaudeProjectsDir() (string, error) {
+	if claudeHome := os.Getenv("CLAUDE_HOME"); claudeHome != "" {
+		return filepath.Join(claudeHome, "projects"), nil
+	}
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to get home dir: %w", err)
@@ -163,8 +167,9 @@ type Watcher struct {
 	skipHistory       atomic.Bool   // if true, start from end of files (live only)
 }
 
-// New creates a new watcher for active sessions
-func New(sessionID string) (*Watcher, error) {
+// New creates a new watcher for active sessions.
+// If pollInterval is 0, DefaultPollInterval is used.
+func New(sessionID string, pollInterval time.Duration) (*Watcher, error) {
 	claudeDir, err := getClaudeProjectsDir()
 	if err != nil {
 		return nil, err
@@ -172,9 +177,13 @@ func New(sessionID string) (*Watcher, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	if pollInterval <= 0 {
+		pollInterval = DefaultPollInterval
+	}
+
 	w := &Watcher{
 		claudeDir:         claudeDir,
-		pollInterval:      DefaultPollInterval,
+		pollInterval:      pollInterval,
 		sessions:          make(map[string]*Session),
 		filePositions:     make(map[string]int64),
 		Items:             make(chan parser.StreamItem, ItemChannelBuffer),

@@ -22,6 +22,9 @@ jobs:
           - goos: darwin
             goarch: arm64
             artifact: claude-esp-darwin-arm64
+          - goos: linux
+            goarch: arm64
+            artifact: claude-esp-linux-arm64
           - goos: windows
             goarch: amd64
             artifact: claude-esp-windows-amd64.exe
@@ -32,13 +35,13 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: '1.23'
 
       - name: Build
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-        run: go build -o ${{ matrix.artifact }} .
+        run: go build -ldflags "-X main.version=${GITHUB_REF_NAME#v}" -o ${{ matrix.artifact }} .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

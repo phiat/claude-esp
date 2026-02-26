@@ -12,7 +12,7 @@ import (
 )
 
 var (
-	version = "0.1.0"
+	version = "0.2.0"
 )
 
 func main() {
@@ -21,6 +21,7 @@ func main() {
 	listSessions := flag.Bool("l", false, "List recent sessions")
 	listActive := flag.Bool("a", false, "List active sessions (modified in last 5 min)")
 	skipHistory := flag.Bool("n", false, "Start from newest (skip history, live only)")
+	pollMs := flag.Int("p", 500, "Poll interval in milliseconds (min 100)")
 	showVersion := flag.Bool("v", false, "Show version")
 	showHelp := flag.Bool("h", false, "Show help")
 
@@ -74,8 +75,14 @@ func main() {
 		return
 	}
 
+	// Validate poll interval
+	pollInterval := time.Duration(*pollMs) * time.Millisecond
+	if pollInterval < 100*time.Millisecond {
+		pollInterval = 100 * time.Millisecond
+	}
+
 	// Run TUI
-	model := tui.NewModel(*sessionID, *skipHistory)
+	model := tui.NewModel(*sessionID, *skipHistory, pollInterval)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
@@ -108,8 +115,12 @@ OPTIONS:
     -l          List recent sessions
     -a          List active sessions (modified in last 5 min)
     -n          Start from newest (skip history, live only)
+    -p <ms>     Poll interval in milliseconds (default 500, min 100)
     -v          Show version
     -h          Show this help
+
+ENVIRONMENT:
+    CLAUDE_HOME     Override Claude config directory (default: ~/.claude)
 
 KEYBINDINGS:
     t           Toggle thinking visibility

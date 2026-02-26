@@ -4,7 +4,7 @@ Stream Claude Code's hidden output (thinking, tool calls, subagents) to a separa
 
 ![claude-esp screenshot](docs/screenshot.png)
 
-looking for the rust port? see: [claude-esp-rs](https://github.com/phiat/claude-esp-rs)
+Looking for the Rust port? See: [claude-esp-rs](https://github.com/phiat/claude-esp-rs)
 
 ## The Problem
 
@@ -20,10 +20,17 @@ When using Claude Code interactively, tool outputs and thinking are collapsed by
 - **Filtering** - Toggle visibility of thinking, tools, outputs per session/agent
 - **Auto-scroll** - Follows new output, or scroll freely through history
 
+## Requirements
+
+- Go 1.23 or later
+
 ## Installation
 
 ```bash
-# Clone and build
+# Install directly via go install
+go install github.com/phiat/claude-esp@latest
+
+# Or clone and build from source
 git clone https://github.com/phiat/claude-esp.git
 cd claude-esp
 go build -o claude-esp .
@@ -32,6 +39,10 @@ go build -o claude-esp .
 cp claude-esp ~/.local/bin/
 ```
 
+### Pre-built binaries
+
+Download pre-built binaries from the [Releases](https://github.com/phiat/claude-esp/releases) page. Available for Linux (amd64, arm64), macOS (amd64, arm64), and Windows (amd64).
+
 ## Usage
 
 ```bash
@@ -39,37 +50,47 @@ cp claude-esp ~/.local/bin/
 claude
 
 # In a second terminal/tmux pane: run the watcher
-./claude-esp
+claude-esp
 ```
 
 ### Options
 
-| Option    | Description                                   |
-| --------- | --------------------------------------------- |
-| `-s <ID>` | Watch a specific session by ID                |
-| `-n`      | Start from newest (skip history, live only)   |
-| `-l`      | List recent sessions                          |
-| `-a`      | List active sessions (modified in last 5 min) |
-| `-v`      | Show version                                  |
-| `-h`      | Show help                                     |
+| Option     | Description                                   |
+| ---------- | --------------------------------------------- |
+| `-s <ID>`  | Watch a specific session by ID                |
+| `-n`       | Start from newest (skip history, live only)   |
+| `-l`       | List recent sessions                          |
+| `-a`       | List active sessions (modified in last 5 min) |
+| `-p <ms>`  | Poll interval in milliseconds (default 500)   |
+| `-v`       | Show version                                  |
+| `-h`       | Show help                                     |
+
+### Environment Variables
+
+| Variable      | Description                                         |
+| ------------- | --------------------------------------------------- |
+| `CLAUDE_HOME` | Override Claude config directory (default: `~/.claude`) |
 
 ### Examples
 
 ```bash
 # Watch all active sessions
-./claude-esp
+claude-esp
 
 # Skip history, only show new output
-./claude-esp -n
+claude-esp -n
 
 # List active sessions
-./claude-esp -a
+claude-esp -a
 
 # Watch a specific session
-./claude-esp -s 0b773376
+claude-esp -s 0b773376
+
+# Faster poll interval (200ms)
+claude-esp -p 200
 
 # List recent sessions
-./claude-esp -l
+claude-esp -l
 ```
 
 ## Keybindings
@@ -163,6 +184,17 @@ claude-esp/
 ## Development
 
 Built with [Bubbletea](https://github.com/charmbracelet/bubbletea) and [Lipgloss](https://github.com/charmbracelet/lipgloss). Issue tracking was done with [beads](https://github.com/steveyegge/beads).
+
+```bash
+# Run tests
+go test ./...
+
+# Build
+go build -o claude-esp .
+
+# Build with version injection
+go build -ldflags "-X main.version=0.2.0" -o claude-esp .
+```
 
 ## License
 

@@ -22,30 +22,32 @@ const (
 
 // Model is the main TUI model
 type Model struct {
-	tree        *TreeView
-	stream      *StreamView
-	watcher     *watcher.Watcher
-	focus       Focus
-	showTree    bool
-	width       int
-	height      int
-	treeWidth   int
-	sessionID   string
-	skipHistory bool
-	err         error
-	quitting    bool
+	tree         *TreeView
+	stream       *StreamView
+	watcher      *watcher.Watcher
+	focus        Focus
+	showTree     bool
+	width        int
+	height       int
+	treeWidth    int
+	sessionID    string
+	skipHistory  bool
+	pollInterval time.Duration
+	err          error
+	quitting     bool
 }
 
 // NewModel creates a new TUI model
-func NewModel(sessionID string, skipHistory bool) *Model {
+func NewModel(sessionID string, skipHistory bool, pollInterval time.Duration) *Model {
 	return &Model{
-		tree:        NewTreeView(),
-		stream:      NewStreamView(),
-		focus:       FocusStream,
-		showTree:    true,
-		treeWidth:   25,
-		sessionID:   sessionID,
-		skipHistory: skipHistory,
+		tree:         NewTreeView(),
+		stream:       NewStreamView(),
+		focus:        FocusStream,
+		showTree:     true,
+		treeWidth:    25,
+		sessionID:    sessionID,
+		skipHistory:  skipHistory,
+		pollInterval: pollInterval,
 	}
 }
 
@@ -70,7 +72,7 @@ func (m *Model) Init() tea.Cmd {
 
 func (m *Model) initWatcher() tea.Cmd {
 	return func() tea.Msg {
-		w, err := watcher.New(m.sessionID)
+		w, err := watcher.New(m.sessionID, m.pollInterval)
 		if err != nil {
 			return errMsg(err)
 		}
