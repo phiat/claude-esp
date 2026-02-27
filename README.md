@@ -1,5 +1,7 @@
 # claude-esp
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/phiat/claude-esp.svg)](https://pkg.go.dev/github.com/phiat/claude-esp)
+
 Stream Claude Code's hidden output (thinking, tool calls, subagents) to a separate terminal in real-time.
 
 ![claude-esp screenshot](docs/screenshot.png)

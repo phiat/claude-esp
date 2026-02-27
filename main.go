@@ -1,3 +1,15 @@
+// Claude-esp streams Claude Code's hidden output (thinking, tool calls, subagents)
+// to a separate terminal in real-time.
+//
+// Usage:
+//
+//	claude-esp              # Watch all active sessions
+//	claude-esp -n           # Skip history, live only
+//	claude-esp -s <ID>      # Watch a specific session
+//	claude-esp -a           # List active sessions
+//	claude-esp -l           # List recent sessions
+//
+// See https://github.com/phiat/claude-esp for full documentation.
 package main
 
 import (
