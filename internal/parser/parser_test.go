@@ -178,6 +178,43 @@ func TestParseLine_UserToolResult(t *testing.T) {
 	}
 }
 
+func TestParseLine_MCPToolResult(t *testing.T) {
+	// MCP tools return content as an array of content blocks, not a plain string
+	line := `{"type":"user","timestamp":"2025-01-01T12:00:00Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_mcp1","content":[{"type":"text","text":"MCP result here"}]}]}}`
+	items, err := ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	item := items[0]
+	if item.Type != TypeToolOutput {
+		t.Errorf("type = %q, want %q", item.Type, TypeToolOutput)
+	}
+	if item.ToolID != "toolu_mcp1" {
+		t.Errorf("toolID = %q, want %q", item.ToolID, "toolu_mcp1")
+	}
+	if item.Content != "MCP result here" {
+		t.Errorf("content = %q, want %q", item.Content, "MCP result here")
+	}
+}
+
+func TestParseLine_MCPToolResultMultiBlock(t *testing.T) {
+	// MCP tools can return multiple content blocks
+	line := `{"type":"user","timestamp":"2025-01-01T12:00:00Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_mcp2","content":[{"type":"text","text":"block one"},{"type":"text","text":"block two"}]}]}}`
+	items, err := ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if items[0].Content != "block one\nblock two" {
+		t.Errorf("content = %q, want %q", items[0].Content, "block one\nblock two")
+	}
+}
+
 func TestParseLine_SubagentMessage(t *testing.T) {
 	line := `{"type":"assistant","agentId":"abc1234567890","timestamp":"2025-01-01T12:00:00Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"subagent thinking"}]}}`
 	items, err := ParseLine(line)

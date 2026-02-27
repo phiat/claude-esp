@@ -65,10 +65,10 @@ type UserMessage struct {
 
 // ToolResult represents a tool result in a user message
 type ToolResult struct {
-	Type      string `json:"type"`
-	ToolUseID string `json:"tool_use_id"`
-	Content   string `json:"content"`
-	IsError   bool   `json:"is_error"`
+	Type      string          `json:"type"`
+	ToolUseID string          `json:"tool_use_id"`
+	Content   json.RawMessage `json:"content"`
+	IsError   bool            `json:"is_error"`
 }
 
 // ToolInput represents the input field for various tools
@@ -184,13 +184,45 @@ func parseUserMessage(raw RawMessage, timestamp time.Time) []StreamItem {
 				AgentID:   raw.AgentID,
 				AgentName: agentName,
 				Timestamp: timestamp,
-				Content:   result.Content,
+				Content:   extractToolResultContent(result.Content),
 				ToolID:    result.ToolUseID,
 			})
 		}
 	}
 
 	return items
+}
+
+// extractToolResultContent handles both string and array-of-blocks content.
+// Built-in tools return a plain string; MCP tools return [{"type":"text","text":"..."}].
+func extractToolResultContent(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+
+	// Try as plain string first (built-in tools)
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+
+	// Try as array of content blocks (MCP tools)
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &blocks); err == nil {
+		var parts []string
+		for _, b := range blocks {
+			if b.Text != "" {
+				parts = append(parts, b.Text)
+			}
+		}
+		return strings.Join(parts, "\n")
+	}
+
+	// Fallback: return raw JSON
+	return string(raw)
 }
 
 func formatToolInput(toolName string, inputRaw json.RawMessage) string {
