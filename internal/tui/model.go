@@ -380,7 +380,9 @@ func (m *Model) renderHeader() string {
 		if !m.watcher.IsAutoDiscoveryEnabled() {
 			autoDisc = " [paused]"
 		}
-		if len(sessions) == 1 {
+		if len(sessions) == 0 {
+			sessionInfo = "Waiting..."
+		} else if len(sessions) == 1 {
 			for _, s := range sessions {
 				sessionInfo = fmt.Sprintf("Session: %s%s", truncate(s.ID, 12), autoDisc)
 			}

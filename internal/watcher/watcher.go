@@ -223,17 +223,15 @@ func New(sessionID string, pollInterval time.Duration) (*Watcher, error) {
 	w.watchActive.Store(sessionID == "") // watch all active if no specific session
 
 	if sessionID != "" {
-		// Watch a specific session
+		// Watch a specific session (graceful — don't crash if not found yet)
 		session, err := w.findSession(sessionID)
-		if err != nil {
-			return nil, err
+		if err == nil {
+			w.sessions[session.ID] = session
 		}
-		w.sessions[session.ID] = session
+		// If not found, watch loops will discover it
 	} else {
-		// Find all active sessions
-		if err := w.discoverActiveSessions(); err != nil {
-			return nil, err
-		}
+		// Find all active sessions (ignore errors — dir may not exist yet)
+		_ = w.discoverActiveSessions()
 	}
 
 	return w, nil
@@ -753,7 +751,11 @@ func (w *Watcher) watchLoopFsnotify() {
 	defer cleanupTicker.Stop()
 
 	// Set up directory watches for discovery
-	w.addDirectoryWatches(w.claudeDir)
+	if _, err := os.Stat(w.claudeDir); err == nil {
+		w.addDirectoryWatches(w.claudeDir)
+	} else {
+		w.watchAncestorDirectory(w.claudeDir)
+	}
 
 	// Register file watches for all known sessions
 	sessions := w.getSessionsSnapshot()
@@ -785,6 +787,22 @@ func (w *Watcher) watchLoopFsnotify() {
 		case <-cleanupTicker.C:
 			w.cleanupFilePositions()
 		}
+	}
+}
+
+// watchAncestorDirectory watches the closest existing ancestor of a path
+func (w *Watcher) watchAncestorDirectory(target string) {
+	dir := target
+	for {
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		if _, err := os.Stat(parent); err == nil {
+			w.fsWatcher.Add(parent)
+			return
+		}
+		dir = parent
 	}
 }
 
@@ -846,6 +864,13 @@ func (w *Watcher) handleFsCreate(path string) {
 	// New directory — add a watch so we catch files created inside it
 	if info.IsDir() {
 		w.fsWatcher.Add(path)
+		// If claude_dir was just created, switch to full recursive watch
+		if strings.HasPrefix(w.claudeDir, path) || path == w.claudeDir {
+			if _, err := os.Stat(w.claudeDir); err == nil {
+				w.addDirectoryWatches(w.claudeDir)
+				_ = w.discoverActiveSessions()
+			}
+		}
 		return
 	}
 

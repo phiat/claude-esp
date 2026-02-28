@@ -418,7 +418,7 @@ func (t *TreeView) SetSize(width, height int) {
 // View renders the tree
 func (t *TreeView) View() string {
 	if len(t.nodes) == 0 {
-		return mutedStyle.Render("No sessions")
+		return mutedStyle.Render("Waiting for Claude Code sessions...")
 	}
 
 	var b strings.Builder
