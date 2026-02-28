@@ -25,3 +25,6 @@ Thumbs.db
 
 # Beads issue tracking (local db)
 .beads/
+
+# Claude artifacts
+AGENTS.md
