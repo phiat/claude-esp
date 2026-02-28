@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/phiat/claude-esp/internal/parser"
 )
 
@@ -41,6 +42,8 @@ const (
 	AgentIDDisplayLength = 7
 	// RecentActivityThreshold is how recent a session must be to show as "active" in listings
 	RecentActivityThreshold = 2 * time.Minute
+	// DebounceInterval is how long to coalesce filesystem write events before reading
+	DebounceInterval = 50 * time.Millisecond
 )
 
 // getClaudeProjectsDir returns the path to Claude's projects directory.
@@ -147,6 +150,12 @@ type NewBackgroundTaskMsg struct {
 	IsComplete    bool
 }
 
+// fileCtx maps a watched file path back to its session and agent context
+type fileCtx struct {
+	sessionID string
+	agentID   string // empty for main session file
+}
+
 // Watcher monitors Claude session files for new content
 type Watcher struct {
 	claudeDir         string
@@ -165,6 +174,14 @@ type Watcher struct {
 	watchActive       atomic.Bool   // if true, only watch recently modified sessions
 	activeWindow      time.Duration // how recent is "active"
 	skipHistory       atomic.Bool   // if true, start from end of files (live only)
+
+	// fsnotify fields
+	fsWatcher      *fsnotify.Watcher      // nil if using polling fallback
+	useFsnotify    bool                   // true if fsnotify initialized successfully
+	fileContexts   map[string]fileCtx     // path -> session/agent context for fsnotify events
+	fileCtxMu      sync.RWMutex           // protects fileContexts
+	debounceTimers map[string]*time.Timer // per-file write debounce timers
+	debounceMu     sync.Mutex             // protects debounceTimers
 }
 
 // New creates a new watcher for active sessions.
@@ -194,6 +211,14 @@ func New(sessionID string, pollInterval time.Duration) (*Watcher, error) {
 		ctx:               ctx,
 		cancel:            cancel,
 		activeWindow:      DefaultActiveWindow,
+		fileContexts:      make(map[string]fileCtx),
+		debounceTimers:    make(map[string]*time.Timer),
+	}
+
+	// Try to initialize fsnotify; fall back to polling on failure
+	if fsw, err := fsnotify.NewWatcher(); err == nil {
+		w.fsWatcher = fsw
+		w.useFsnotify = true
 	}
 	w.watchActive.Store(sessionID == "") // watch all active if no specific session
 
@@ -403,12 +428,30 @@ func (w *Watcher) GetActivityInfo(activeWithin time.Duration) []ActivityInfo {
 
 // Start begins watching for new content
 func (w *Watcher) Start() {
-	go w.watchLoop()
+	if w.useFsnotify {
+		go w.watchLoopFsnotify()
+	} else {
+		go w.watchLoopPolling()
+	}
 }
 
 // Stop stops the watcher
 func (w *Watcher) Stop() {
 	w.cancel()
+	if w.fsWatcher != nil {
+		w.fsWatcher.Close()
+	}
+	// Cancel all pending debounce timers
+	w.debounceMu.Lock()
+	for _, timer := range w.debounceTimers {
+		timer.Stop()
+	}
+	w.debounceMu.Unlock()
+}
+
+// UsingFsnotify returns whether the watcher is using filesystem notifications
+func (w *Watcher) UsingFsnotify() bool {
+	return w.useFsnotify
 }
 
 // getSessionsSnapshot returns a copy of all sessions to avoid holding lock during iteration
@@ -682,7 +725,8 @@ func (w *Watcher) fileContainsToolResult(path string, toolID string) bool {
 	return false
 }
 
-func (w *Watcher) watchLoop() {
+// watchLoopPolling is the original polling-based watch loop, used as fallback
+func (w *Watcher) watchLoopPolling() {
 	ticker := time.NewTicker(w.pollInterval)
 	defer ticker.Stop()
 
@@ -700,6 +744,276 @@ func (w *Watcher) watchLoop() {
 		case <-ticker.C:
 			w.handlePollTick()
 		}
+	}
+}
+
+// watchLoopFsnotify uses OS-native filesystem notifications for real-time streaming
+func (w *Watcher) watchLoopFsnotify() {
+	cleanupTicker := time.NewTicker(CleanupInterval)
+	defer cleanupTicker.Stop()
+
+	// Set up directory watches for discovery
+	w.addDirectoryWatches(w.claudeDir)
+
+	// Register file watches for all known sessions
+	sessions := w.getSessionsSnapshot()
+	w.initializeSessionReading(sessions)
+	for _, session := range sessions {
+		w.registerSessionWatches(session)
+	}
+
+	for {
+		select {
+		case <-w.ctx.Done():
+			return
+
+		case event, ok := <-w.fsWatcher.Events:
+			if !ok {
+				return
+			}
+			w.handleFsEvent(event)
+
+		case err, ok := <-w.fsWatcher.Errors:
+			if !ok {
+				return
+			}
+			select {
+			case w.Errors <- fmt.Errorf("fsnotify: %w", err):
+			default:
+			}
+
+		case <-cleanupTicker.C:
+			w.cleanupFilePositions()
+		}
+	}
+}
+
+// addDirectoryWatches recursively adds fsnotify watches on directories
+func (w *Watcher) addDirectoryWatches(root string) {
+	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			w.fsWatcher.Add(path)
+		}
+		return nil
+	})
+}
+
+// registerSessionWatches adds file watches and context for a session's files
+func (w *Watcher) registerSessionWatches(session *Session) {
+	// Watch and register main file
+	w.addFileWatch(session.MainFile, session.ID, "")
+
+	// Watch and register subagent files
+	session.mu.RLock()
+	defer session.mu.RUnlock()
+	for agentID, path := range session.Subagents {
+		w.addFileWatch(path, session.ID, agentID)
+	}
+}
+
+// addFileWatch adds an fsnotify watch on a file and registers its context
+func (w *Watcher) addFileWatch(path, sessionID, agentID string) {
+	w.fsWatcher.Add(path)
+
+	w.fileCtxMu.Lock()
+	w.fileContexts[path] = fileCtx{sessionID: sessionID, agentID: agentID}
+	w.fileCtxMu.Unlock()
+}
+
+// handleFsEvent processes a single filesystem event
+func (w *Watcher) handleFsEvent(event fsnotify.Event) {
+	path := event.Name
+
+	if event.Has(fsnotify.Create) {
+		w.handleFsCreate(path)
+	}
+
+	if event.Has(fsnotify.Write) {
+		w.handleFsWrite(path)
+	}
+}
+
+// handleFsCreate processes a file/directory creation event
+func (w *Watcher) handleFsCreate(path string) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+
+	// New directory — add a watch so we catch files created inside it
+	if info.IsDir() {
+		w.fsWatcher.Add(path)
+		return
+	}
+
+	// New .jsonl file — could be a session or subagent
+	if strings.HasSuffix(path, ".jsonl") {
+		if strings.Contains(path, "/subagents/") {
+			// New subagent file
+			w.handleNewSubagentFile(path)
+		} else if w.watchActive.Load() {
+			// New main session file (only if auto-discovery is on)
+			w.handleNewSessionFile(path)
+		}
+		return
+	}
+
+	// New .txt in tool-results/ — background task output
+	if strings.HasSuffix(path, ".txt") && strings.Contains(path, "/tool-results/") {
+		w.handleNewToolResultFile(path)
+	}
+}
+
+// handleFsWrite processes a file write event with debouncing
+func (w *Watcher) handleFsWrite(path string) {
+	w.fileCtxMu.RLock()
+	ctx, ok := w.fileContexts[path]
+	w.fileCtxMu.RUnlock()
+	if !ok {
+		return // not a file we're tracking
+	}
+
+	w.debounceMu.Lock()
+	defer w.debounceMu.Unlock()
+
+	if timer, exists := w.debounceTimers[path]; exists {
+		timer.Reset(DebounceInterval)
+		return
+	}
+
+	sessionID := ctx.sessionID
+	agentID := ctx.agentID
+	w.debounceTimers[path] = time.AfterFunc(DebounceInterval, func() {
+		w.readFile(path, sessionID, agentID)
+		w.debounceMu.Lock()
+		delete(w.debounceTimers, path)
+		w.debounceMu.Unlock()
+	})
+}
+
+// handleNewSessionFile processes discovery of a new session JSONL file
+func (w *Watcher) handleNewSessionFile(path string) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+	if !isMainSessionFile(path, info) {
+		return
+	}
+
+	session, err := w.buildSession(path)
+	if err != nil {
+		return
+	}
+
+	w.sessionsMu.Lock()
+	if _, exists := w.sessions[session.ID]; exists {
+		w.sessionsMu.Unlock()
+		return
+	}
+	w.sessions[session.ID] = session
+	w.sessionsMu.Unlock()
+
+	w.registerSessionWatches(session)
+
+	select {
+	case w.NewSession <- NewSessionMsg{SessionID: session.ID, ProjectPath: session.ProjectPath}:
+	default:
+	}
+}
+
+// handleNewSubagentFile processes discovery of a new subagent JSONL file
+func (w *Watcher) handleNewSubagentFile(path string) {
+	if !strings.HasSuffix(path, ".jsonl") {
+		return
+	}
+
+	agentID := strings.TrimPrefix(strings.TrimSuffix(filepath.Base(path), ".jsonl"), "agent-")
+
+	// Find which session owns this subagent by walking up the path:
+	// .../projects/<project>/<sessionID>/subagents/agent-<id>.jsonl
+	subagentsDir := filepath.Dir(path)
+	sessionDir := filepath.Dir(subagentsDir)
+	sessionID := filepath.Base(sessionDir)
+
+	w.sessionsMu.RLock()
+	session, exists := w.sessions[sessionID]
+	w.sessionsMu.RUnlock()
+	if !exists {
+		return
+	}
+
+	session.mu.Lock()
+	if _, exists := session.Subagents[agentID]; exists {
+		session.mu.Unlock()
+		return
+	}
+	session.Subagents[agentID] = path
+	session.mu.Unlock()
+
+	w.addFileWatch(path, sessionID, agentID)
+
+	select {
+	case w.NewAgent <- NewAgentMsg{SessionID: sessionID, AgentID: agentID}:
+	default:
+	}
+}
+
+// handleNewToolResultFile processes discovery of a new background task output file
+func (w *Watcher) handleNewToolResultFile(path string) {
+	if !strings.HasSuffix(path, ".txt") {
+		return
+	}
+
+	toolID := strings.TrimSuffix(filepath.Base(path), ".txt")
+
+	// Walk up: .../projects/<project>/<sessionID>/tool-results/<toolID>.txt
+	toolResultsDir := filepath.Dir(path)
+	sessionDir := filepath.Dir(toolResultsDir)
+	sessionID := filepath.Base(sessionDir)
+
+	w.sessionsMu.RLock()
+	session, exists := w.sessions[sessionID]
+	w.sessionsMu.RUnlock()
+	if !exists {
+		return
+	}
+
+	session.mu.RLock()
+	_, taskExists := session.BackgroundTasks[toolID]
+	session.mu.RUnlock()
+	if taskExists {
+		return
+	}
+
+	parentAgentID, toolName := w.findBackgroundTaskParent(session, toolID)
+	isComplete := w.isBackgroundTaskComplete(session, toolID)
+
+	task := &BackgroundTask{
+		ToolID:        toolID,
+		ParentAgentID: parentAgentID,
+		ToolName:      toolName,
+		OutputPath:    path,
+		IsComplete:    isComplete,
+	}
+
+	session.mu.Lock()
+	session.BackgroundTasks[toolID] = task
+	session.mu.Unlock()
+
+	select {
+	case w.NewBackgroundTask <- NewBackgroundTaskMsg{
+		SessionID:     sessionID,
+		ParentAgentID: parentAgentID,
+		ToolID:        toolID,
+		ToolName:      toolName,
+		OutputPath:    path,
+		IsComplete:    isComplete,
+	}:
+	default:
 	}
 }
 

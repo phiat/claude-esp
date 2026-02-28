@@ -63,7 +63,7 @@ claude-esp
 | `-n`       | Start from newest (skip history, live only)   |
 | `-l`       | List recent sessions                          |
 | `-a`       | List active sessions (modified in last 5 min) |
-| `-p <ms>`  | Poll interval in milliseconds (default 500)   |
+| `-p <ms>`  | Poll interval in ms (fallback mode only, default 500) |
 | `-v`       | Show version                                  |
 | `-h`       | Show help                                     |
 
@@ -136,10 +136,12 @@ Background task outputs are stored in:
 The watcher:
 
 1. Discovers active sessions (modified in last 5 minutes)
-2. Polls JSONL files every 500ms for new content
-3. Parses JSON lines and extracts thinking/tool_use/tool_result
-4. Discovers background tasks and correlates them with spawning agents
-5. Renders them in a TUI with tree navigation and filtering
+2. Uses OS-native filesystem notifications ([fsnotify](https://github.com/fsnotify/fsnotify)) to detect file changes in real-time (inotify on Linux, kqueue/FSEvents on macOS)
+3. Falls back to polling (configurable with `-p`) on filesystems that don't support notifications (NFS, some cross-FS WSL2 setups)
+4. Debounces rapid writes (50ms window) to efficiently handle burst output
+5. Parses JSON lines and extracts thinking/tool_use/tool_result
+6. Discovers background tasks and correlates them with spawning agents
+7. Renders them in a TUI with tree navigation and filtering
 
 ## tmux Setup
 

@@ -24,7 +24,7 @@ import (
 )
 
 var (
-	version = "0.2.2"
+	version = "0.3.0"
 )
 
 func main() {
@@ -127,7 +127,7 @@ OPTIONS:
     -l          List recent sessions
     -a          List active sessions (modified in last 5 min)
     -n          Start from newest (skip history, live only)
-    -p <ms>     Poll interval in milliseconds (default 500, min 100)
+    -p <ms>     Poll interval in ms, fallback mode only (default 500, min 100)
     -v          Show version
     -h          Show this help
 
