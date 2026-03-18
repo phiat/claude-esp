@@ -37,12 +37,12 @@ type StreamItem struct {
 
 // RawMessage represents a line from the JSONL file
 type RawMessage struct {
-	Type           string          `json:"type"`
-	AgentID        string          `json:"agentId,omitempty"`
-	SessionID      string          `json:"sessionId"`
-	Timestamp      string          `json:"timestamp"`
-	Message        json.RawMessage `json:"message"`
-	ToolUseResult  json.RawMessage `json:"toolUseResult,omitempty"`
+	Type          string          `json:"type"`
+	AgentID       string          `json:"agentId,omitempty"`
+	SessionID     string          `json:"sessionId"`
+	Timestamp     string          `json:"timestamp"`
+	Message       json.RawMessage `json:"message"`
+	ToolUseResult json.RawMessage `json:"toolUseResult,omitempty"`
 }
 
 // RawToolUseResult represents the toolUseResult field on user messages
