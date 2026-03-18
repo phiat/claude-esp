@@ -44,7 +44,7 @@ func TestTreeView_AddSessionDuplicate(t *testing.T) {
 func TestTreeView_AddAgent(t *testing.T) {
 	tv := NewTreeView()
 	tv.AddSession("sess1", "project")
-	tv.AddAgent("sess1", "agent123456789")
+	tv.AddAgent("sess1", "agent123456789", "")
 
 	session := tv.Root.Children[0]
 	if len(session.Children) != 2 {
@@ -65,7 +65,7 @@ func TestTreeView_AddAgent(t *testing.T) {
 func TestTreeView_AddAgentNoSession(t *testing.T) {
 	tv := NewTreeView()
 	// Should not panic when adding agent to non-existent session
-	tv.AddAgent("nonexistent", "agent1")
+	tv.AddAgent("nonexistent", "agent1", "")
 	if len(tv.Root.Children) != 0 {
 		t.Error("should not add anything for non-existent session")
 	}
@@ -74,8 +74,8 @@ func TestTreeView_AddAgentNoSession(t *testing.T) {
 func TestTreeView_AddAgentDuplicate(t *testing.T) {
 	tv := NewTreeView()
 	tv.AddSession("sess1", "project")
-	tv.AddAgent("sess1", "agent1")
-	tv.AddAgent("sess1", "agent1")
+	tv.AddAgent("sess1", "agent1", "")
+	tv.AddAgent("sess1", "agent1", "")
 
 	session := tv.Root.Children[0]
 	if len(session.Children) != 2 {
@@ -107,7 +107,7 @@ func TestTreeView_AddBackgroundTask(t *testing.T) {
 func TestTreeView_AddBackgroundTaskUnderAgent(t *testing.T) {
 	tv := NewTreeView()
 	tv.AddSession("sess1", "project")
-	tv.AddAgent("sess1", "agent1")
+	tv.AddAgent("sess1", "agent1", "")
 	tv.AddBackgroundTask("sess1", "agent1", "toolu_456", "Task: explore", "/path/out.txt", true)
 
 	agent := tv.Root.Children[0].Children[1]
@@ -180,7 +180,7 @@ func TestTreeView_RemoveNonExistent(t *testing.T) {
 func TestTreeView_GetEnabledFilters(t *testing.T) {
 	tv := NewTreeView()
 	tv.AddSession("sess1", "project")
-	tv.AddAgent("sess1", "agent1")
+	tv.AddAgent("sess1", "agent1", "")
 
 	filters := tv.GetEnabledFilters()
 	if len(filters) != 2 {
@@ -222,7 +222,7 @@ func TestTreeView_GetEnabledFiltersDisabled(t *testing.T) {
 func TestTreeView_Navigation(t *testing.T) {
 	tv := NewTreeView()
 	tv.AddSession("sess1", "project")
-	tv.AddAgent("sess1", "agent1")
+	tv.AddAgent("sess1", "agent1", "")
 	// Nodes: session, main, agent = 3 nodes
 
 	if tv.cursor != 0 {
@@ -300,7 +300,7 @@ func TestTreeView_GetSelectedNode(t *testing.T) {
 func TestTreeView_GetSelectedSession(t *testing.T) {
 	tv := NewTreeView()
 	tv.AddSession("sess1", "project")
-	tv.AddAgent("sess1", "agent1")
+	tv.AddAgent("sess1", "agent1", "")
 
 	// At session
 	tv.cursor = 0

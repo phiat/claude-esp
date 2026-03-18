@@ -22,19 +22,21 @@ const (
 
 // Model is the main TUI model
 type Model struct {
-	tree         *TreeView
-	stream       *StreamView
-	watcher      *watcher.Watcher
-	focus        Focus
-	showTree     bool
-	width        int
-	height       int
-	treeWidth    int
-	sessionID    string
-	skipHistory  bool
-	pollInterval time.Duration
-	err          error
-	quitting     bool
+	tree              *TreeView
+	stream            *StreamView
+	watcher           *watcher.Watcher
+	focus             Focus
+	showTree          bool
+	width             int
+	height            int
+	treeWidth         int
+	sessionID         string
+	skipHistory       bool
+	pollInterval      time.Duration
+	err               error
+	quitting          bool
+	totalInputTokens  int64
+	totalOutputTokens int64
 }
 
 // NewModel creates a new TUI model
@@ -87,7 +89,8 @@ func (m *Model) initWatcher() tea.Cmd {
 		for _, session := range w.GetSessions() {
 			m.tree.AddSession(session.ID, session.ProjectPath)
 			for agentID := range session.Subagents {
-				m.tree.AddAgent(session.ID, agentID)
+				agentType := session.SubagentTypes[agentID]
+				m.tree.AddAgent(session.ID, agentID, agentType)
 			}
 		}
 
@@ -125,11 +128,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateActivityStatus()
 
 	case streamItemMsg:
-		m.stream.AddItem(parser.StreamItem(msg))
+		item := parser.StreamItem(msg)
+		if item.InputTokens > 0 {
+			m.totalInputTokens += item.InputTokens
+		}
+		if item.OutputTokens > 0 {
+			m.totalOutputTokens += item.OutputTokens
+		}
+		m.stream.AddItem(item)
 		m.stream.SetEnabledFilters(m.tree.GetEnabledFilters())
 
 	case newAgentMsg:
-		m.tree.AddAgent(msg.SessionID, msg.AgentID)
+		m.tree.AddAgent(msg.SessionID, msg.AgentID, msg.AgentType)
 		m.stream.SetEnabledFilters(m.tree.GetEnabledFilters())
 
 	case newSessionMsg:
@@ -391,12 +401,34 @@ func (m *Model) renderHeader() string {
 		}
 	}
 
+	// Token usage display
+	tokenInfo := ""
+	if m.totalInputTokens > 0 || m.totalOutputTokens > 0 {
+		tokenInfo = fmt.Sprintf("│ %s in / %s out",
+			formatTokenCount(m.totalInputTokens),
+			formatTokenCount(m.totalOutputTokens))
+	}
+
 	// Build header - use plain text and apply headerStyle uniformly (like Rust version)
 	// Don't use Width() as it causes truncation on narrow terminals
 	headerText := fmt.Sprintf("%s  │  %s", toggles, sessionInfo)
+	if tokenInfo != "" {
+		headerText += "  " + tokenInfo
+	}
 	header := headerStyle.Render(headerText)
 
 	return header
+}
+
+// formatTokenCount formats token counts for display
+func formatTokenCount(n int64) string {
+	if n < 1000 {
+		return fmt.Sprintf("%d", n)
+	}
+	if n < 1000000 {
+		return fmt.Sprintf("%.1fk", float64(n)/1000.0)
+	}
+	return fmt.Sprintf("%.1fm", float64(n)/1000000.0)
 }
 
 func (m *Model) renderToggle(name string, enabled bool, key string) string {

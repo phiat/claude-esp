@@ -215,7 +215,11 @@ func (s *StreamView) renderItem(item parser.StreamItem, width int) string {
 		b.WriteString(toolInputContentStyle.Render(content))
 
 	case parser.TypeToolOutput:
-		header := toolOutputStyle.Render(toolOutputIcon + " Output")
+		outputLabel := toolOutputIcon + " Output"
+		if item.DurationMs > 0 {
+			outputLabel += " " + formatDuration(item.DurationMs)
+		}
+		header := toolOutputStyle.Render(outputLabel)
 		b.WriteString(fmt.Sprintf("%s%s%s\n", agentName, sep, header))
 		content := s.truncateContent(item.Content, width)
 		b.WriteString(toolOutputContentStyle.Render(content))
@@ -261,6 +265,19 @@ func (s *StreamView) truncateContent(content string, width int) string {
 	}
 
 	return strings.Join(wrapped, "\n")
+}
+
+// formatDuration formats a duration in milliseconds to a human-readable string
+func formatDuration(ms int64) string {
+	if ms < 1000 {
+		return fmt.Sprintf("(%dms)", ms)
+	}
+	secs := float64(ms) / 1000.0
+	if secs < 60 {
+		return fmt.Sprintf("(%.1fs)", secs)
+	}
+	mins := secs / 60.0
+	return fmt.Sprintf("(%.1fm)", mins)
 }
 
 // View renders the stream

@@ -105,8 +105,10 @@ func (t *TreeView) AddSession(sessionID, projectPath string) *TreeNode {
 	return session
 }
 
-// AddAgent adds a subagent under a session
-func (t *TreeView) AddAgent(sessionID, agentID string) {
+// AddAgent adds a subagent under a session.
+// If agentType is non-empty, it is used as the display name.
+// For compound types like "feature-dev:code-reviewer", only the part after ":" is used.
+func (t *TreeView) AddAgent(sessionID, agentID, agentType string) {
 	// Find the session node
 	var session *TreeNode
 	for _, child := range t.Root.Children {
@@ -127,11 +129,21 @@ func (t *TreeView) AddAgent(sessionID, agentID string) {
 		}
 	}
 
+	displayName := fmt.Sprintf("Agent-%s", agentID[:min(AgentIDDisplayLength, len(agentID))])
+	if agentType != "" {
+		// For compound types like "feature-dev:code-reviewer", use part after ":"
+		if idx := strings.LastIndex(agentType, ":"); idx >= 0 && idx < len(agentType)-1 {
+			displayName = agentType[idx+1:]
+		} else {
+			displayName = agentType
+		}
+	}
+
 	node := &TreeNode{
 		Type:      NodeTypeAgent,
 		ID:        agentID,
 		SessionID: sessionID,
-		Name:      fmt.Sprintf("Agent-%s", agentID[:min(AgentIDDisplayLength, len(agentID))]),
+		Name:      displayName,
 		Enabled:   true,
 		IsActive:  true,
 		Parent:    session,
