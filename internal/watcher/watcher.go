@@ -1331,16 +1331,18 @@ func (w *Watcher) readFile(path string, sessionID string, agentID string, agentT
 			// Set session ID
 			item.SessionID = sessionID
 
-			// Set agent ID from context if not already set
-			if agentID != "" && item.AgentID == "" {
-				item.AgentID = agentID
+			// Set agent ID and name from context
+			if agentID != "" {
+				if item.AgentID == "" {
+					item.AgentID = agentID
+				}
 				if agentType != "" {
 					if idx := strings.LastIndex(agentType, ":"); idx >= 0 && idx < len(agentType)-1 {
 						item.AgentName = agentType[idx+1:]
 					} else {
 						item.AgentName = agentType
 					}
-				} else {
+				} else if item.AgentName == "" || strings.HasPrefix(item.AgentName, "Agent-") {
 					item.AgentName = fmt.Sprintf("Agent-%s", agentID[:min(AgentIDDisplayLength, len(agentID))])
 				}
 			}
