@@ -3,6 +3,7 @@ package watcher
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -115,8 +116,9 @@ type Session struct {
 	ProjectPath     string
 	MainFile        string
 	Subagents       map[string]string          // agentID -> file path
+	SubagentTypes   map[string]string          // agentID -> agentType from .meta.json
 	BackgroundTasks map[string]*BackgroundTask // toolID -> task info
-	mu              sync.RWMutex               // protects Subagents and BackgroundTasks maps
+	mu              sync.RWMutex               // protects Subagents, SubagentTypes and BackgroundTasks maps
 }
 
 // BackgroundTask represents a background task launched by an agent
@@ -132,6 +134,7 @@ type BackgroundTask struct {
 type NewAgentMsg struct {
 	SessionID string
 	AgentID   string
+	AgentType string
 }
 
 // NewSessionMsg signals when a new session is discovered
@@ -313,6 +316,7 @@ func (w *Watcher) buildSession(mainFile string) (*Session, error) {
 		ProjectPath:     projectPath,
 		MainFile:        mainFile,
 		Subagents:       make(map[string]string),
+		SubagentTypes:   make(map[string]string),
 		BackgroundTasks: make(map[string]*BackgroundTask),
 	}
 
@@ -322,7 +326,11 @@ func (w *Watcher) buildSession(mainFile string) (*Session, error) {
 		for _, entry := range entries {
 			if strings.HasSuffix(entry.Name(), ".jsonl") {
 				agentID := strings.TrimPrefix(strings.TrimSuffix(entry.Name(), ".jsonl"), "agent-")
-				session.Subagents[agentID] = filepath.Join(subagentDir, entry.Name())
+				jsonlPath := filepath.Join(subagentDir, entry.Name())
+				session.Subagents[agentID] = jsonlPath
+				if agentType := readAgentType(jsonlPath); agentType != "" {
+					session.SubagentTypes[agentID] = agentType
+				}
 			}
 		}
 	}
@@ -911,8 +919,9 @@ func (w *Watcher) handleFsWrite(path string) {
 
 	sessionID := ctx.sessionID
 	agentID := ctx.agentID
+	agentType := w.lookupAgentType(sessionID, agentID)
 	w.debounceTimers[path] = time.AfterFunc(DebounceInterval, func() {
-		w.readFile(path, sessionID, agentID)
+		w.readFile(path, sessionID, agentID, agentType)
 		w.debounceMu.Lock()
 		delete(w.debounceTimers, path)
 		w.debounceMu.Unlock()
@@ -950,6 +959,40 @@ func (w *Watcher) handleNewSessionFile(path string) {
 	}
 }
 
+// lookupAgentType returns the stored agent type for a given session/agent pair.
+func (w *Watcher) lookupAgentType(sessionID, agentID string) string {
+	if agentID == "" {
+		return ""
+	}
+	w.sessionsMu.RLock()
+	session, exists := w.sessions[sessionID]
+	w.sessionsMu.RUnlock()
+	if !exists {
+		return ""
+	}
+	session.mu.RLock()
+	agentType := session.SubagentTypes[agentID]
+	session.mu.RUnlock()
+	return agentType
+}
+
+// readAgentType reads the .meta.json file corresponding to a .jsonl path
+// and returns the agentType value. Returns empty string if not available.
+func readAgentType(jsonlPath string) string {
+	metaPath := strings.TrimSuffix(jsonlPath, ".jsonl") + ".meta.json"
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		return ""
+	}
+	var meta struct {
+		AgentType string `json:"agentType"`
+	}
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return ""
+	}
+	return meta.AgentType
+}
+
 // handleNewSubagentFile processes discovery of a new subagent JSONL file
 func (w *Watcher) handleNewSubagentFile(path string) {
 	if !strings.HasSuffix(path, ".jsonl") {
@@ -971,18 +1014,23 @@ func (w *Watcher) handleNewSubagentFile(path string) {
 		return
 	}
 
+	agentType := readAgentType(path)
+
 	session.mu.Lock()
 	if _, exists := session.Subagents[agentID]; exists {
 		session.mu.Unlock()
 		return
 	}
 	session.Subagents[agentID] = path
+	if agentType != "" {
+		session.SubagentTypes[agentID] = agentType
+	}
 	session.mu.Unlock()
 
 	w.addFileWatch(path, sessionID, agentID)
 
 	select {
-	case w.NewAgent <- NewAgentMsg{SessionID: sessionID, AgentID: agentID}:
+	case w.NewAgent <- NewAgentMsg{SessionID: sessionID, AgentID: agentID, AgentType: agentType}:
 	default:
 	}
 }
@@ -1107,6 +1155,8 @@ func (w *Watcher) checkForNewSubagents(session *Session) {
 			path := filepath.Join(subagentDir, entry.Name())
 
 			// Check and add with write lock to avoid TOCTOU race
+			agentType := readAgentType(path)
+
 			session.mu.Lock()
 			_, exists := session.Subagents[agentID]
 			if exists {
@@ -1114,10 +1164,13 @@ func (w *Watcher) checkForNewSubagents(session *Session) {
 				continue
 			}
 			session.Subagents[agentID] = path
+			if agentType != "" {
+				session.SubagentTypes[agentID] = agentType
+			}
 			session.mu.Unlock()
 
 			select {
-			case w.NewAgent <- NewAgentMsg{SessionID: session.ID, AgentID: agentID}:
+			case w.NewAgent <- NewAgentMsg{SessionID: session.ID, AgentID: agentID, AgentType: agentType}:
 			default:
 			}
 		}
@@ -1223,23 +1276,27 @@ func findPositionForLastNLines(path string, n int) int64 {
 
 func (w *Watcher) readSessionFiles(session *Session) {
 	// Read main file
-	w.readFile(session.MainFile, session.ID, "")
+	w.readFile(session.MainFile, session.ID, "", "")
 
-	// Get snapshot of subagents to avoid holding lock during file reads
+	// Get snapshot of subagents and types to avoid holding lock during file reads
 	session.mu.RLock()
 	subagents := make(map[string]string, len(session.Subagents))
 	for k, v := range session.Subagents {
 		subagents[k] = v
 	}
+	subagentTypes := make(map[string]string, len(session.SubagentTypes))
+	for k, v := range session.SubagentTypes {
+		subagentTypes[k] = v
+	}
 	session.mu.RUnlock()
 
 	// Read subagent files
 	for agentID, path := range subagents {
-		w.readFile(path, session.ID, agentID)
+		w.readFile(path, session.ID, agentID, subagentTypes[agentID])
 	}
 }
 
-func (w *Watcher) readFile(path string, sessionID string, agentID string) {
+func (w *Watcher) readFile(path string, sessionID string, agentID string, agentType string) {
 	file, err := os.Open(path)
 	if err != nil {
 		return
@@ -1277,7 +1334,15 @@ func (w *Watcher) readFile(path string, sessionID string, agentID string) {
 			// Set agent ID from context if not already set
 			if agentID != "" && item.AgentID == "" {
 				item.AgentID = agentID
-				item.AgentName = fmt.Sprintf("Agent-%s", agentID[:min(AgentIDDisplayLength, len(agentID))])
+				if agentType != "" {
+					if idx := strings.LastIndex(agentType, ":"); idx >= 0 && idx < len(agentType)-1 {
+						item.AgentName = agentType[idx+1:]
+					} else {
+						item.AgentName = agentType
+					}
+				} else {
+					item.AgentName = fmt.Sprintf("Agent-%s", agentID[:min(AgentIDDisplayLength, len(agentID))])
+				}
 			}
 
 			select {

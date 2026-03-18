@@ -22,29 +22,45 @@ const (
 
 // StreamItem represents a single item in the output stream
 type StreamItem struct {
-	Type      StreamItemType
-	SessionID string // which session this belongs to
-	AgentID   string // empty for main session, "abc123" for subagents
-	AgentName string // human-readable name derived from agent type or ID
-	Timestamp time.Time
-	Content   string
-	ToolName  string // for tool_input/tool_output
-	ToolID    string // to correlate input with output
+	Type         StreamItemType
+	SessionID    string // which session this belongs to
+	AgentID      string // empty for main session, "abc123" for subagents
+	AgentName    string // human-readable name derived from agent type or ID
+	Timestamp    time.Time
+	Content      string
+	ToolName     string // for tool_input/tool_output
+	ToolID       string // to correlate input with output
+	DurationMs   int64  // tool execution duration in ms (0 = not available)
+	InputTokens  int64  // usage.input_tokens from assistant messages
+	OutputTokens int64  // usage.output_tokens from assistant messages
 }
 
 // RawMessage represents a line from the JSONL file
 type RawMessage struct {
-	Type      string          `json:"type"`
-	AgentID   string          `json:"agentId,omitempty"`
-	SessionID string          `json:"sessionId"`
-	Timestamp string          `json:"timestamp"`
-	Message   json.RawMessage `json:"message"`
+	Type          string          `json:"type"`
+	AgentID       string          `json:"agentId,omitempty"`
+	SessionID     string          `json:"sessionId"`
+	Timestamp     string          `json:"timestamp"`
+	Message       json.RawMessage `json:"message"`
+	ToolUseResult json.RawMessage `json:"toolUseResult,omitempty"`
+}
+
+// RawToolUseResult represents the toolUseResult field on user messages
+type RawToolUseResult struct {
+	DurationMs int64 `json:"durationMs"`
 }
 
 // AssistantMessage represents the message field for assistant responses
 type AssistantMessage struct {
 	Role    string         `json:"role"`
 	Content []ContentBlock `json:"content"`
+	Usage   *UsageInfo     `json:"usage,omitempty"`
+}
+
+// UsageInfo represents token usage from assistant messages
+type UsageInfo struct {
+	InputTokens  int64 `json:"input_tokens"`
+	OutputTokens int64 `json:"output_tokens"`
 }
 
 // ContentBlock represents a single content item in assistant response
@@ -159,6 +175,12 @@ func parseAssistantMessage(raw RawMessage, timestamp time.Time) []StreamItem {
 		}
 	}
 
+	// Attach token usage to the first item only
+	if len(items) > 0 && msg.Usage != nil {
+		items[0].InputTokens = msg.Usage.InputTokens
+		items[0].OutputTokens = msg.Usage.OutputTokens
+	}
+
 	return items
 }
 
@@ -171,6 +193,15 @@ func parseUserMessage(raw RawMessage, timestamp time.Time) []StreamItem {
 		return nil
 	}
 
+	// Parse toolUseResult for duration
+	var durationMs int64
+	if len(raw.ToolUseResult) > 0 {
+		var tur RawToolUseResult
+		if err := json.Unmarshal(raw.ToolUseResult, &tur); err == nil {
+			durationMs = tur.DurationMs
+		}
+	}
+
 	var items []StreamItem
 	agentName := "Main"
 	if raw.AgentID != "" {
@@ -180,12 +211,13 @@ func parseUserMessage(raw RawMessage, timestamp time.Time) []StreamItem {
 	for _, result := range results {
 		if result.Type == "tool_result" {
 			items = append(items, StreamItem{
-				Type:      TypeToolOutput,
-				AgentID:   raw.AgentID,
-				AgentName: agentName,
-				Timestamp: timestamp,
-				Content:   extractToolResultContent(result.Content),
-				ToolID:    result.ToolUseID,
+				Type:       TypeToolOutput,
+				AgentID:    raw.AgentID,
+				AgentName:  agentName,
+				Timestamp:  timestamp,
+				Content:    extractToolResultContent(result.Content),
+				ToolID:     result.ToolUseID,
+				DurationMs: durationMs,
 			})
 		}
 	}
