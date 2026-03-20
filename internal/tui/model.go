@@ -253,15 +253,13 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.stream.ToggleAutoScroll()
 		}
 
-	case "x", "d":
-		// Remove selected session (only when tree is focused)
-		if m.focus == FocusTree && m.watcher != nil {
-			sessionID := m.tree.GetSelectedSession()
-			if sessionID != "" {
-				m.watcher.RemoveSession(sessionID)
-				m.tree.RemoveSession(sessionID)
-				m.stream.SetEnabledFilters(m.tree.GetEnabledFilters())
-			}
+	case "x":
+		m.stream.ToggleText()
+
+	case "s":
+		if m.focus == FocusTree {
+			m.tree.Solo()
+			m.stream.SetEnabledFilters(m.tree.GetEnabledFilters())
 		}
 
 	case "A":
@@ -377,11 +375,12 @@ func (m *Model) renderHeader() string {
 	thinking := m.renderToggle("Thinking", m.stream.IsThinkingEnabled(), "t")
 	toolInput := m.renderToggle("Tools", m.stream.IsToolInputEnabled(), "i")
 	toolOutput := m.renderToggle("Output", m.stream.IsToolOutputEnabled(), "o")
-	autoScroll := m.renderToggle("Auto", m.stream.IsAutoScrollEnabled(), "a")
+	textToggle := m.renderToggle("Text", m.stream.IsTextEnabled(), "x")
+	autoScroll := m.renderToggle("Scroll", m.stream.IsAutoScrollEnabled(), "a")
 	treeToggle := m.renderToggle("Tree", m.showTree, "h")
 
-	toggles := fmt.Sprintf("%s  %s  %s  %s  %s",
-		thinking, toolInput, toolOutput, autoScroll, treeToggle)
+	toggles := fmt.Sprintf("%s  %s  %s  %s  %s  %s",
+		thinking, toolInput, toolOutput, textToggle, autoScroll, treeToggle)
 
 	// Session count and auto-discovery status
 	sessionInfo := ""
@@ -475,7 +474,7 @@ func (m *Model) renderStreamOnly() string {
 func (m *Model) renderHelp() string {
 	var help string
 	if m.focus == FocusTree {
-		help = "j/k: navigate │ space: toggle │ x: remove │ A: auto-discover │ q: quit"
+		help = "j/k: navigate │ space: toggle │ s: solo │ A: auto-discover │ q: quit"
 	} else {
 		help = "j/k: scroll │ g/G: top/bottom │ A: auto-discover │ tab: tree │ q: quit"
 	}

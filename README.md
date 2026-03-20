@@ -105,14 +105,15 @@ claude-esp -l
 | `t`       | Toggle thinking visibility                |
 | `i`       | Toggle tool input visibility              |
 | `o`       | Toggle tool output visibility             |
+| `x`       | Toggle text/response visibility           |
 | `a`       | Toggle auto-scroll                        |
 | `h`       | Hide/show tree pane                       |
 | `A`       | Toggle auto-discovery of new sessions     |
 | `tab`     | Switch focus between tree and stream      |
 | `j/k/↑/↓` | Navigate tree or scroll stream            |
 | `space`   | Toggle selected item in tree              |
+| `s`       | Solo selected session/agent (toggle)      |
 | `enter`   | Load background task output (when selected)|
-| `x/d`     | Remove selected session from tree         |
 | `g/G`     | Go to top/bottom of stream                |
 | `q`       | Quit                                      |
 

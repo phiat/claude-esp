@@ -47,7 +47,7 @@ func NewStreamView() *StreamView {
 		showThinking:   true,
 		showToolInput:  true,
 		showToolOutput: true,
-		showText:       false, // hide main text by default
+		showText:       true,
 		enabledFilters: []EnabledFilter{},
 	}
 }
@@ -63,12 +63,14 @@ func (s *StreamView) SetSize(width, height int) {
 
 // AddItem adds a new item to the stream
 func (s *StreamView) AddItem(item parser.StreamItem) {
-	// Deduplicate tool input/output by ToolID
+	// Deduplicate by (ToolID, Type) so tool input and output
+	// with the same tool_id are both kept
 	if item.ToolID != "" {
-		if s.seenToolIDs[item.ToolID] {
+		dedupKey := fmt.Sprintf("%s:%s", item.ToolID, item.Type)
+		if s.seenToolIDs[dedupKey] {
 			return // Skip duplicate
 		}
-		s.seenToolIDs[item.ToolID] = true
+		s.seenToolIDs[dedupKey] = true
 	}
 
 	s.items = append(s.items, item)
@@ -103,6 +105,12 @@ func (s *StreamView) ToggleToolOutput() {
 	s.updateContent()
 }
 
+// ToggleText toggles text visibility
+func (s *StreamView) ToggleText() {
+	s.showText = !s.showText
+	s.updateContent()
+}
+
 // ToggleAutoScroll toggles auto-scroll
 func (s *StreamView) ToggleAutoScroll() {
 	s.autoScroll = !s.autoScroll
@@ -132,6 +140,11 @@ func (s *StreamView) IsToolInputEnabled() bool {
 // IsToolOutputEnabled returns tool output filter state
 func (s *StreamView) IsToolOutputEnabled() bool {
 	return s.showToolOutput
+}
+
+// IsTextEnabled returns text filter state
+func (s *StreamView) IsTextEnabled() bool {
+	return s.showText
 }
 
 // IsAutoScrollEnabled returns auto-scroll state
@@ -215,7 +228,22 @@ func (s *StreamView) renderItem(item parser.StreamItem, width int) string {
 		b.WriteString(toolInputContentStyle.Render(content))
 
 	case parser.TypeToolOutput:
-		outputLabel := toolOutputIcon + " Output"
+		// Look up tool name from matching ToolInput
+		toolName := ""
+		if item.ToolID != "" {
+			for _, other := range s.items {
+				if other.Type == parser.TypeToolInput && other.ToolID == item.ToolID {
+					toolName = other.ToolName
+					break
+				}
+			}
+		}
+		var outputLabel string
+		if toolName != "" {
+			outputLabel = toolOutputIcon + " " + toolName + " result"
+		} else {
+			outputLabel = toolOutputIcon + " Output"
+		}
 		if item.DurationMs > 0 {
 			outputLabel += " " + formatDuration(item.DurationMs)
 		}

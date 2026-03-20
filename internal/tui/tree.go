@@ -288,6 +288,67 @@ func (t *TreeView) Toggle() {
 	}
 }
 
+// Solo isolates the selected node: disables all others, enables only this one.
+// If already soloed, re-enables all.
+func (t *TreeView) Solo() {
+	if t.cursor < 0 || t.cursor >= len(t.nodes) {
+		return
+	}
+	selected := t.nodes[t.cursor]
+
+	if t.isSoloed(selected) {
+		// Un-solo: re-enable everything
+		setAllEnabled(t.Root, true)
+	} else {
+		// Disable all sessions and their children
+		for _, session := range t.Root.Children {
+			setAllEnabled(session, false)
+		}
+
+		// Enable the selected node and the path to it
+		switch selected.Type {
+		case NodeTypeSession:
+			setAllEnabled(selected, true)
+		case NodeTypeMain, NodeTypeAgent:
+			if selected.Parent != nil {
+				selected.Parent.Enabled = true
+			}
+			selected.Enabled = true
+		}
+	}
+}
+
+func (t *TreeView) isSoloed(selected *TreeNode) bool {
+	if !selected.Enabled {
+		return false
+	}
+
+	for _, session := range t.Root.Children {
+		if selected.Type == NodeTypeSession {
+			if session != selected && session.Enabled {
+				return false
+			}
+		} else {
+			for _, child := range session.Children {
+				if child.Type == NodeTypeBackgroundTask {
+					continue
+				}
+				if child != selected && child.Enabled {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
+func setAllEnabled(node *TreeNode, enabled bool) {
+	node.Enabled = enabled
+	for _, child := range node.Children {
+		setAllEnabled(child, enabled)
+	}
+}
+
 // GetSelectedSession returns the session ID of the currently selected node (or its parent session)
 func (t *TreeView) GetSelectedSession() string {
 	if t.cursor < 0 || t.cursor >= len(t.nodes) {

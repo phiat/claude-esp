@@ -41,6 +41,7 @@ func TestStreamView_Deduplication(t *testing.T) {
 	s := NewStreamView()
 	s.SetSize(80, 24)
 
+	// Input and output with same ToolID should both be kept (different types)
 	item1 := parser.StreamItem{
 		Type:      parser.TypeToolInput,
 		SessionID: "sess1",
@@ -57,10 +58,16 @@ func TestStreamView_Deduplication(t *testing.T) {
 	}
 
 	s.AddItem(item1)
-	s.AddItem(item2) // same ToolID, should be skipped
+	s.AddItem(item2)
 
-	if len(s.items) != 1 {
-		t.Errorf("expected 1 item (duplicate skipped), got %d", len(s.items))
+	if len(s.items) != 2 {
+		t.Errorf("expected 2 items (input + output kept), got %d", len(s.items))
+	}
+
+	// Duplicate of same type + same ToolID should be skipped
+	s.AddItem(item1)
+	if len(s.items) != 2 {
+		t.Errorf("expected 2 items (true duplicate skipped), got %d", len(s.items))
 	}
 }
 
