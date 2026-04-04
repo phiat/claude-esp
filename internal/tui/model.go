@@ -33,6 +33,8 @@ type Model struct {
 	sessionID         string
 	skipHistory       bool
 	pollInterval      time.Duration
+	activeWindow      time.Duration
+	maxSessions       int
 	err               error
 	quitting          bool
 	totalInputTokens  int64
@@ -40,7 +42,7 @@ type Model struct {
 }
 
 // NewModel creates a new TUI model
-func NewModel(sessionID string, skipHistory bool, pollInterval time.Duration) *Model {
+func NewModel(sessionID string, skipHistory bool, pollInterval time.Duration, activeWindow time.Duration, maxSessions int) *Model {
 	return &Model{
 		tree:         NewTreeView(),
 		stream:       NewStreamView(),
@@ -50,6 +52,8 @@ func NewModel(sessionID string, skipHistory bool, pollInterval time.Duration) *M
 		sessionID:    sessionID,
 		skipHistory:  skipHistory,
 		pollInterval: pollInterval,
+		activeWindow: activeWindow,
+		maxSessions:  maxSessions,
 	}
 }
 
@@ -74,7 +78,7 @@ func (m *Model) Init() tea.Cmd {
 
 func (m *Model) initWatcher() tea.Cmd {
 	return func() tea.Msg {
-		w, err := watcher.New(m.sessionID, m.pollInterval)
+		w, err := watcher.New(m.sessionID, m.pollInterval, m.activeWindow, m.maxSessions)
 		if err != nil {
 			return errMsg(err)
 		}

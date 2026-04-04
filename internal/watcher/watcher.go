@@ -178,6 +178,7 @@ type Watcher struct {
 	cancel            context.CancelFunc
 	watchActive       atomic.Bool   // if true, only watch recently modified sessions
 	activeWindow      time.Duration // how recent is "active"
+	maxSessions       int           // max sessions to track (0=unlimited)
 	skipHistory       atomic.Bool   // if true, start from end of files (live only)
 
 	// fsnotify fields
@@ -191,7 +192,9 @@ type Watcher struct {
 
 // New creates a new watcher for active sessions.
 // If pollInterval is 0, DefaultPollInterval is used.
-func New(sessionID string, pollInterval time.Duration) (*Watcher, error) {
+// If activeWindow is 0, DefaultActiveWindow is used.
+// If maxSessions is 0, no limit is applied.
+func New(sessionID string, pollInterval time.Duration, activeWindow time.Duration, maxSessions int) (*Watcher, error) {
 	claudeDir, err := getClaudeProjectsDir()
 	if err != nil {
 		return nil, err
@@ -201,6 +204,9 @@ func New(sessionID string, pollInterval time.Duration) (*Watcher, error) {
 
 	if pollInterval <= 0 {
 		pollInterval = DefaultPollInterval
+	}
+	if activeWindow <= 0 {
+		activeWindow = DefaultActiveWindow
 	}
 
 	w := &Watcher{
@@ -215,7 +221,8 @@ func New(sessionID string, pollInterval time.Duration) (*Watcher, error) {
 		NewBackgroundTask: make(chan NewBackgroundTaskMsg, ErrorChannelBuffer),
 		ctx:               ctx,
 		cancel:            cancel,
-		activeWindow:      DefaultActiveWindow,
+		activeWindow:      activeWindow,
+		maxSessions:       maxSessions,
 		fileContexts:      make(map[string]fileCtx),
 		debounceTimers:    make(map[string]*time.Timer),
 	}
@@ -340,8 +347,16 @@ func (w *Watcher) buildSession(mainFile string) (*Session, error) {
 	return session, nil
 }
 
+// discoveredSession is a temporary struct for sorting by modification time
+type discoveredSession struct {
+	session *Session
+	modTime time.Time
+}
+
 func (w *Watcher) discoverActiveSessions() error {
 	now := time.Now()
+
+	var discovered []discoveredSession
 
 	err := filepath.Walk(w.claudeDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -361,9 +376,23 @@ func (w *Watcher) discoverActiveSessions() error {
 			return nil
 		}
 
-		w.sessions[session.ID] = session
+		discovered = append(discovered, discoveredSession{session: session, modTime: info.ModTime()})
 		return nil
 	})
+
+	// Sort by most recent first and apply max-sessions cap
+	if len(discovered) > 1 {
+		sort.Slice(discovered, func(i, j int) bool {
+			return discovered[i].modTime.After(discovered[j].modTime)
+		})
+	}
+	if w.maxSessions > 0 && len(discovered) > w.maxSessions {
+		discovered = discovered[:w.maxSessions]
+	}
+
+	for _, d := range discovered {
+		w.sessions[d.session.ID] = d.session
+	}
 
 	return err
 }
@@ -1095,6 +1124,9 @@ func (w *Watcher) handleNewToolResultFile(path string) {
 func (w *Watcher) checkForNewSessions() {
 	now := time.Now()
 
+	// Collect candidates first, then decide which to add
+	var candidates []discoveredSession
+
 	filepath.Walk(w.claudeDir, func(path string, info os.FileInfo, err error) error {
 		// Check for context cancellation to avoid goroutine leak
 		select {
@@ -1118,30 +1150,55 @@ func (w *Watcher) checkForNewSessions() {
 		basename := filepath.Base(path)
 		id := strings.TrimSuffix(basename, ".jsonl")
 
-		// Check and add with write lock to avoid TOCTOU race
-		w.sessionsMu.Lock()
+		w.sessionsMu.RLock()
 		_, exists := w.sessions[id]
+		w.sessionsMu.RUnlock()
+
 		if exists {
-			w.sessionsMu.Unlock()
 			return nil
 		}
 
 		session, err := w.buildSession(path)
 		if err != nil {
-			w.sessionsMu.Unlock()
 			return nil
 		}
 
-		w.sessions[session.ID] = session
+		candidates = append(candidates, discoveredSession{session: session, modTime: info.ModTime()})
+		return nil
+	})
+
+	if len(candidates) == 0 {
+		return
+	}
+
+	// Sort candidates by most recent first
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].modTime.After(candidates[j].modTime)
+	})
+
+	w.sessionsMu.Lock()
+	for _, c := range candidates {
+		// Enforce max-sessions cap
+		if w.maxSessions > 0 && len(w.sessions) >= w.maxSessions {
+			break
+		}
+
+		if _, exists := w.sessions[c.session.ID]; exists {
+			continue
+		}
+
+		w.sessions[c.session.ID] = c.session
 		w.sessionsMu.Unlock()
 
 		// Notify about new session
 		select {
-		case w.NewSession <- NewSessionMsg{SessionID: session.ID, ProjectPath: session.ProjectPath}:
+		case w.NewSession <- NewSessionMsg{SessionID: c.session.ID, ProjectPath: c.session.ProjectPath}:
 		default:
 		}
-		return nil
-	})
+
+		w.sessionsMu.Lock()
+	}
+	w.sessionsMu.Unlock()
 }
 
 func (w *Watcher) checkForNewSubagents(session *Session) {

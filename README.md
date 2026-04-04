@@ -65,8 +65,10 @@ claude-esp
 | `-s <ID>`  | Watch a specific session by ID                |
 | `-n`       | Start from newest (skip history, live only)   |
 | `-l`       | List recent sessions                          |
-| `-a`       | List active sessions (modified in last 5 min) |
+| `-a`       | List active sessions                          |
 | `-p <ms>`  | Poll interval in ms (fallback mode only, default 500) |
+| `-w <dur>` | Active window duration (default `5m`, e.g. `30s`, `2m`) |
+| `-m <N>`   | Max sessions to show in tree (default 0 = unlimited) |
 | `-v`       | Show version                                  |
 | `-h`       | Show help                                     |
 

@@ -34,6 +34,8 @@ func main() {
 	listActive := flag.Bool("a", false, "List active sessions (modified in last 5 min)")
 	skipHistory := flag.Bool("n", false, "Start from newest (skip history, live only)")
 	pollMs := flag.Int("p", 500, "Poll interval in milliseconds (min 100)")
+	activeWindowStr := flag.String("w", "5m", "Active window duration (e.g. 30s, 2m, 5m)")
+	maxSessions := flag.Int("m", 0, "Max sessions to show in tree (0=unlimited)")
 	showVersion := flag.Bool("v", false, "Show version")
 	showHelp := flag.Bool("h", false, "Show help")
 
@@ -49,14 +51,21 @@ func main() {
 		return
 	}
 
+	// Parse active window duration
+	activeWindow, err := time.ParseDuration(*activeWindowStr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Invalid active window duration %q: %v\n", *activeWindowStr, err)
+		os.Exit(1)
+	}
+
 	if *listActive {
-		sessions, err := watcher.ListActiveSessions(5 * time.Minute)
+		sessions, err := watcher.ListActiveSessions(activeWindow)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
 		if len(sessions) == 0 {
-			fmt.Println("No active sessions (none modified in last 5 minutes)")
+			fmt.Printf("No active sessions (none modified in last %s)\n", activeWindow)
 			return
 		}
 		fmt.Println("Active sessions:")
@@ -94,7 +103,7 @@ func main() {
 	}
 
 	// Run TUI
-	model := tui.NewModel(*sessionID, *skipHistory, pollInterval)
+	model := tui.NewModel(*sessionID, *skipHistory, pollInterval, activeWindow, *maxSessions)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
@@ -125,9 +134,11 @@ USAGE:
 OPTIONS:
     -s <ID>     Watch a specific session by ID
     -l          List recent sessions
-    -a          List active sessions (modified in last 5 min)
+    -a          List active sessions
     -n          Start from newest (skip history, live only)
     -p <ms>     Poll interval in ms, fallback mode only (default 500, min 100)
+    -w <dur>    Active window duration (default 5m, e.g. 30s, 2m, 10m)
+    -m <N>      Max sessions to show in tree (default 0=unlimited)
     -v          Show version
     -h          Show this help
 
