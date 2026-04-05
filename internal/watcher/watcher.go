@@ -903,6 +903,11 @@ func (w *Watcher) handleFsCreate(path string) {
 	// New directory — add a watch so we catch files created inside it
 	if info.IsDir() {
 		w.fsWatcher.Add(path)
+		// Scan for files created before the watch was established.
+		// In-process agents (Agent Teams) create the subagents/ directory and
+		// write .jsonl files nearly simultaneously, so the file CREATE event
+		// fires before the watch is active and gets lost.
+		w.scanNewDirectory(path)
 		// If claude_dir was just created, switch to full recursive watch
 		if strings.HasPrefix(w.claudeDir, path) || path == w.claudeDir {
 			if _, err := os.Stat(w.claudeDir); err == nil {
@@ -928,6 +933,33 @@ func (w *Watcher) handleFsCreate(path string) {
 	// New .txt in tool-results/ — background task output
 	if strings.HasSuffix(path, ".txt") && strings.Contains(path, "/tool-results/") {
 		w.handleNewToolResultFile(path)
+	}
+}
+
+// scanNewDirectory scans a newly watched directory for files that may have been
+// created before the fsnotify watch was established. This closes the race window
+// where in-process agents write files between directory creation and watch setup.
+// All discovery handlers are idempotent, so duplicate calls are safe no-ops.
+func (w *Watcher) scanNewDirectory(path string) {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return
+	}
+
+	base := filepath.Base(path)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		fullPath := filepath.Join(path, name)
+
+		switch {
+		case base == "subagents" && strings.HasSuffix(name, ".jsonl"):
+			w.handleNewSubagentFile(fullPath)
+		case base == "tool-results" && strings.HasSuffix(name, ".txt"):
+			w.handleNewToolResultFile(fullPath)
+		}
 	}
 }
 
