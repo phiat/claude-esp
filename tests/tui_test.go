@@ -7,7 +7,10 @@
 //
 // Run:
 //
-//	go test -v -timeout 120s ./tests/
+//	go test -v -tags=tui -timeout 120s ./tests/
+//
+//go:build tui
+
 package tests
 
 import (
