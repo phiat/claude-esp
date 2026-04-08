@@ -3,6 +3,8 @@ package tui
 import (
 	"fmt"
 	"strings"
+
+	"github.com/mattn/go-runewidth"
 )
 
 // NodeType indicates the type of tree node
@@ -575,11 +577,37 @@ func (t *TreeView) View() string {
 			line = treeNormalStyle.Render(line)
 		}
 
-		// Ensure consistent width
+		// Ensure consistent width.
+		//
+		// `t.width` is set by the caller to the OUTER width of the
+		// bordered pane the tree is rendered into. treeBorderStyle uses
+		// `Border()` (2 cols) + `Padding(0, 1)` (2 cols) = 4 cols of
+		// chrome, so the actual content area is `t.width - 4`.
+		//
+		// Padding to `t.width - 2` (the old value) put every line 2
+		// cols wider than the content area, which the terminal then
+		// wrapped to a second row. With emoji icons adding another
+		// visible column per line, every tree entry was 2-3 cols too
+		// wide and rendered as 2 terminal rows. That effectively
+		// doubled the tree height and overflowed the viewport,
+		// scrolling the header + top borders off the screen.
+		//
+		// runewidth.StringWidth (via lipglossWidth below) now correctly
+		// counts emoji as 2 cols, and the padding target is -4 so the
+		// line fits inside the bordered+padded pane without wrapping.
 		if t.width > 0 {
+			innerWidth := t.width - 4
+			if innerWidth < 1 {
+				innerWidth = 1
+			}
 			lineLen := lipglossWidth(line)
-			if lineLen < t.width-2 {
-				line += strings.Repeat(" ", t.width-2-lineLen)
+			if lineLen < innerWidth {
+				line += strings.Repeat(" ", innerWidth-lineLen)
+			} else if lineLen > innerWidth {
+				// Truncate over-wide lines rune-by-rune so we stop at
+				// exactly innerWidth visible columns. Preserves ANSI
+				// escape sequences that precede the visible runes.
+				line = runewidth.Truncate(stripAnsi(line), innerWidth, "…")
 			}
 		}
 
@@ -589,13 +617,29 @@ func (t *TreeView) View() string {
 		}
 	}
 
-	// Pad to fill height
-	lines := strings.Count(b.String(), "\n") + 1
-	for i := lines; i < t.height-2; i++ {
-		b.WriteString("\n")
+	// Defensive: never emit more lines than the assigned inner height.
+	// The lipglossWidth fix above keeps each line from wrapping in the
+	// terminal, but if we simply have more nodes than height allows,
+	// we still need to cap the output so the pane doesn't overflow.
+	innerHeight := t.height - 2
+	if innerHeight < 1 {
+		innerHeight = 1
+	}
+	raw := b.String()
+	allLines := strings.Split(raw, "\n")
+	if len(allLines) > innerHeight {
+		// Keep the BOTTOM innerHeight lines — that's the most recent /
+		// most relevant content if nodes were appended over time. The
+		// future: add scroll support that respects t.cursor.
+		allLines = allLines[len(allLines)-innerHeight:]
 	}
 
-	return b.String()
+	// Pad to fill height
+	for len(allLines) < innerHeight {
+		allLines = append(allLines, "")
+	}
+
+	return strings.Join(allLines, "\n")
 }
 
 func (t *TreeView) getDepth(node *TreeNode) int {
@@ -618,7 +662,13 @@ func (t *TreeView) isLastChild(node *TreeNode) bool {
 
 // lipglossWidth calculates visible width accounting for ANSI codes
 func lipglossWidth(s string) int {
-	return len([]rune(stripAnsi(s)))
+	// runewidth.StringWidth correctly handles East Asian wide characters
+	// and emoji (which occupy 2 terminal columns despite being 1 rune).
+	// len([]rune(s)) would undercount lines with 💤/📁/💬/🤖/✓/⏳ icons,
+	// causing them to be padded too short and then wrap in the terminal —
+	// which made the tree taller than its assigned height and overflowed
+	// the viewport, clipping the top of the TUI.
+	return runewidth.StringWidth(stripAnsi(s))
 }
 
 func stripAnsi(s string) string {

@@ -324,13 +324,63 @@ func (m *Model) loadBackgroundTaskOutput(node *TreeNode) {
 	m.stream.ScrollDown(9999)
 }
 
+// wrappedRows returns how many terminal rows a single-line string will
+// occupy at the current pane width. lipgloss.Render() does NOT wrap text
+// unless Width() is set on the style, so a long header string comes back
+// as a single line from lipgloss.Height() even though the terminal will
+// wrap it at display time. We compute the wrap ourselves by measuring the
+// visible character width and dividing by the pane width.
+func (m *Model) wrappedRows(s string) int {
+	if m.width <= 0 {
+		return 1
+	}
+	visible := lipgloss.Width(s)
+	// lipgloss.Height also catches any intentional newlines inside s
+	newlines := lipgloss.Height(s)
+	rowsPerLogicalLine := (visible + m.width - 1) / m.width // ceil
+	if rowsPerLogicalLine < 1 {
+		rowsPerLogicalLine = 1
+	}
+	// If the string has embedded newlines, each logical line can itself wrap.
+	// This is a conservative approximation: multiply by visible/width.
+	// For single-line strings (the common case for header/help), newlines=1.
+	rows := newlines * rowsPerLogicalLine
+	if rows < 1 {
+		return 1
+	}
+	return rows
+}
+
+// chromeHeight returns how many rows the header + help bar actually occupy
+// at the current width. The header wraps on narrow terminals because of
+// the toggle labels, so measuring it dynamically prevents the tree/stream
+// panes from overflowing the top of the viewport.
+//
+// Total rows we reserve: header (measured, wrap-aware) + help (measured,
+// wrap-aware) + 2 for the inner pane's top+bottom border.
+func (m *Model) chromeHeight() int {
+	headerRows := m.wrappedRows(m.renderHeader())
+	helpRows := m.wrappedRows(m.renderHelp())
+	return headerRows + helpRows + 2
+}
+
+// contentInnerHeight is the Height(...) value we pass to the tree/stream
+// styled pane. Always at least 1 row so the TUI doesn't collapse on
+// minuscule terminals.
+func (m *Model) contentInnerHeight() int {
+	h := m.height - m.chromeHeight()
+	if h < 1 {
+		return 1
+	}
+	return h
+}
+
 func (m *Model) updateLayout() {
 	if m.width == 0 || m.height == 0 {
 		return
 	}
 
-	// Reserve space for header and help bar
-	contentHeight := m.height - 4
+	contentHeight := m.contentInnerHeight()
 
 	if m.showTree {
 		m.tree.SetSize(m.treeWidth, contentHeight)
@@ -353,6 +403,11 @@ func (m *Model) View() string {
 	if m.width == 0 {
 		return "Loading..."
 	}
+
+	// Recompute layout in case the header wrapped to more rows than we
+	// planned for (e.g. after a terminal resize or after the watcher
+	// reports more sessions and the session-count label changes width).
+	m.updateLayout()
 
 	var b strings.Builder
 
@@ -444,6 +499,8 @@ func (m *Model) renderToggle(name string, enabled bool, key string) string {
 }
 
 func (m *Model) renderWithTree() string {
+	innerHeight := m.contentInnerHeight()
+
 	// Tree pane
 	treeBorder := treeBorderStyle
 	if m.focus == FocusTree {
@@ -451,7 +508,7 @@ func (m *Model) renderWithTree() string {
 	}
 	treePane := treeBorder.
 		Width(m.treeWidth).
-		Height(m.height - 4).
+		Height(innerHeight).
 		Render(m.tree.View())
 
 	// Stream pane
@@ -461,7 +518,7 @@ func (m *Model) renderWithTree() string {
 	}
 	streamPane := streamBorder.
 		Width(m.width - m.treeWidth - 5).
-		Height(m.height - 4).
+		Height(innerHeight).
 		Render(m.stream.View())
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, treePane, " ", streamPane)
@@ -471,7 +528,7 @@ func (m *Model) renderStreamOnly() string {
 	streamBorder := streamBorderStyle.BorderForeground(primaryColor)
 	return streamBorder.
 		Width(m.width - 2).
-		Height(m.height - 4).
+		Height(m.contentInnerHeight()).
 		Render(m.stream.View())
 }
 

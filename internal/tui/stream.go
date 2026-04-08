@@ -54,12 +54,31 @@ func NewStreamView() *StreamView {
 	}
 }
 
-// SetSize updates dimensions
+// SetSize updates dimensions.
+//
+// `width` is the OUTER width of the bordered pane the stream is rendered
+// into. streamBorderStyle uses `Border()` (2 cols) + `Padding(0, 1)`
+// (2 cols) = 4 cols of horizontal chrome. Vertical is border-only
+// (Padding(0, 1) is vertical=0, horizontal=1), so the viewport height is
+// `height - 2` for top + bottom border.
+//
+// Previously this used `width - 2`, which left the viewport 2 cols wider
+// than the actual content area and pushed every wrapped line past the
+// right border. That worked OK for ASCII but interacted with the tree
+// pane's over-wide padding to push the whole TUI past its viewport.
 func (s *StreamView) SetSize(width, height int) {
 	s.width = width
 	s.height = height
-	s.viewport.Width = width - 2 // account for border
-	s.viewport.Height = height - 2
+	innerWidth := width - 4
+	if innerWidth < 1 {
+		innerWidth = 1
+	}
+	innerHeight := height - 2
+	if innerHeight < 1 {
+		innerHeight = 1
+	}
+	s.viewport.Width = innerWidth
+	s.viewport.Height = innerHeight
 	s.updateContent()
 }
 
