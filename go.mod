@@ -1,6 +1,6 @@
 module github.com/phiat/claude-esp
 
-go 1.24.4
+go 1.25.9
 
 require (
 	github.com/charmbracelet/bubbles v0.21.0
