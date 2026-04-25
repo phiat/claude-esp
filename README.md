@@ -18,6 +18,7 @@ When using Claude Code interactively, tool outputs and thinking are collapsed by
 - **Hierarchical tree view** - Sessions with nested Main/Agent nodes
 - **Real-time streaming** - See thinking, tool calls, and outputs as they happen
 - **Subagent tracking** - Automatically discovers and displays subagent activity
+- **Session events** - Compaction boundaries, hook output, post-edit LSP diagnostics, and PR-link events surfaced inline
 - **Agent type labels** - Shows agent types (Explore, code-reviewer, etc.) from `.meta.json`
 - **Token usage tracking** - Cumulative input/output token counts in the header bar
 - **Tool execution duration** - Shows how long each tool call took
@@ -70,6 +71,7 @@ claude-esp
 | `-w <dur>` | Active window duration (default `5m`, e.g. `30s`, `2m`) |
 | `-m <N>`   | Max sessions to show in tree (default 0 = unlimited) |
 | `-c <dur>` | Auto-collapse sessions inactive ≥ dur (default 0 = disabled, e.g. `2m`) |
+| `-D`       | Debug: surface raw `type:subtype` for every JSONL line type the parser would otherwise drop |
 | `-v`       | Show version                                  |
 | `-h`       | Show help                                     |
 

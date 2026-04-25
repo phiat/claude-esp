@@ -231,6 +231,16 @@ func (s *StreamView) renderItem(item parser.StreamItem, width int) string {
 		text := fmt.Sprintf("── turn ended %s ──", dur)
 		return mutedStyle.Render(text)
 	}
+	if item.Type == parser.TypeCompactMarker {
+		text := "── compacted ──"
+		if item.Content != "" {
+			text = fmt.Sprintf("── compacted (%s) ──", item.Content)
+		}
+		return mutedStyle.Render(text)
+	}
+	if item.Type == parser.TypePRLink {
+		return mutedStyle.Render(fmt.Sprintf("── %s ──", item.Content))
+	}
 
 	var b strings.Builder
 
@@ -287,6 +297,45 @@ func (s *StreamView) renderItem(item parser.StreamItem, width int) string {
 		b.WriteString(fmt.Sprintf("%s%s%s\n", agentName, sep, header))
 		content := s.truncateContent(item.Content, width)
 		b.WriteString(content)
+
+	case parser.TypeHookOutput:
+		label := hookIcon + " Hook"
+		if item.ToolName != "" {
+			label += " " + item.ToolName
+		}
+		if item.DurationMs > 0 {
+			label += " " + formatDuration(item.DurationMs)
+		}
+		header := hookStyle.Render(label)
+		b.WriteString(fmt.Sprintf("%s%s%s\n", agentName, sep, header))
+		if item.Content != "" {
+			content := s.truncateContent(item.Content, width)
+			b.WriteString(hookContentStyle.Render(content))
+		}
+
+	case parser.TypeDiagnostics:
+		label := diagnosticsIcon + " Diagnostics"
+		if item.ToolName != "" {
+			label += " " + item.ToolName
+		}
+		header := diagnosticsStyle.Render(label)
+		b.WriteString(fmt.Sprintf("%s%s%s\n", agentName, sep, header))
+		if item.Content != "" {
+			content := s.truncateContent(item.Content, width)
+			b.WriteString(diagnosticsContentStyle.Render(content))
+		}
+
+	case parser.TypeDebug:
+		label := debugIcon + " Debug"
+		if item.ToolName != "" {
+			label += " " + item.ToolName
+		}
+		header := debugStyle.Render(label)
+		b.WriteString(fmt.Sprintf("%s%s%s\n", agentName, sep, header))
+		if item.Content != "" {
+			content := s.truncateContent(item.Content, width)
+			b.WriteString(debugContentStyle.Render(content))
+		}
 	}
 
 	// Add separator line
