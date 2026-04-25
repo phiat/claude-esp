@@ -40,6 +40,30 @@ var (
 	textStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#F9FAFB"))
 
+	// Hook style - cyan (system-injected output, distinct from tool calls)
+	hookIcon  = "🪝"
+	hookStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#06B6D4")).
+			Bold(true)
+	hookContentStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#67E8F9"))
+
+	// Diagnostics style - red-ish (LSP findings after edits)
+	diagnosticsIcon  = "⚠"
+	diagnosticsStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#F87171")).
+				Bold(true)
+	diagnosticsContentStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#FCA5A5"))
+
+	// Debug style - dim grey/orange, used for -D flag
+	debugIcon  = "🔍"
+	debugStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#9CA3AF")).
+			Bold(true)
+	debugContentStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#9CA3AF"))
+
 	// Agent name styles
 	mainAgentStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#60A5FA")).

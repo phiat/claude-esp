@@ -19,6 +19,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/phiat/claude-esp/internal/parser"
 	"github.com/phiat/claude-esp/internal/tui"
 	"github.com/phiat/claude-esp/internal/watcher"
 )
@@ -37,10 +38,13 @@ func main() {
 	activeWindowStr := flag.String("w", "5m", "Active window duration (e.g. 30s, 2m, 5m)")
 	maxSessions := flag.Int("m", 0, "Max sessions to show in tree (0=unlimited)")
 	collapseAfterStr := flag.String("c", "0", "Auto-collapse sessions inactive ≥ this duration (0=disabled, e.g. 2m)")
+	debugAll := flag.Bool("D", false, "Debug: surface raw type:subtype for every JSONL line type the parser would otherwise drop")
 	showVersion := flag.Bool("v", false, "Show version")
 	showHelp := flag.Bool("h", false, "Show help")
 
 	flag.Parse()
+
+	parser.DebugAll = *debugAll
 
 	if *showHelp {
 		printHelp()
@@ -151,6 +155,7 @@ OPTIONS:
     -w <dur>    Active window duration (default 5m, e.g. 30s, 2m, 10m)
     -m <N>      Max sessions to show in tree (default 0=unlimited)
     -c <dur>    Auto-collapse sessions inactive ≥ dur (0=disabled, e.g. 2m, 30s)
+    -D          Debug: show raw type:subtype for every JSONL line we'd drop
     -v          Show version
     -h          Show this help
 

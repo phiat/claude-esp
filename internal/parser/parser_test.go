@@ -325,6 +325,160 @@ func TestParseLine_TurnDuration(t *testing.T) {
 	}
 }
 
+func TestParseLine_CompactBoundary(t *testing.T) {
+	line := `{"type":"system","subtype":"compact_boundary","timestamp":"2025-01-01T12:00:00Z","sessionId":"abc","compactMetadata":{"trigger":"auto","preTokens":179698}}`
+	items, err := ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 compact marker, got %d", len(items))
+	}
+	if items[0].Type != TypeCompactMarker {
+		t.Errorf("type = %q, want %q", items[0].Type, TypeCompactMarker)
+	}
+	if items[0].Content != "auto, 179k pre-tokens" {
+		t.Errorf("content = %q, want %q", items[0].Content, "auto, 179k pre-tokens")
+	}
+	if items[0].SessionID != "abc" {
+		t.Errorf("sessionID = %q, want abc", items[0].SessionID)
+	}
+}
+
+func TestParseLine_CompactBoundary_NoMetadata(t *testing.T) {
+	line := `{"type":"system","subtype":"compact_boundary","timestamp":"2025-01-01T12:00:00Z","sessionId":"abc"}`
+	items, err := ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 || items[0].Type != TypeCompactMarker {
+		t.Fatalf("expected 1 compact marker, got %+v", items)
+	}
+	if items[0].Content != "" {
+		t.Errorf("content = %q, want empty", items[0].Content)
+	}
+}
+
+func TestParseLine_HookSuccess(t *testing.T) {
+	line := `{"type":"attachment","timestamp":"2025-01-01T12:00:00Z","sessionId":"abc","attachment":{"type":"hook_success","hookName":"SessionStart:startup","hookEvent":"SessionStart","stdout":"hello\nworld","exitCode":0,"durationMs":116,"command":"bd prime"}}`
+	items, err := ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 hook item, got %d", len(items))
+	}
+	if items[0].Type != TypeHookOutput {
+		t.Errorf("type = %q, want %q", items[0].Type, TypeHookOutput)
+	}
+	if items[0].ToolName != "SessionStart:startup" {
+		t.Errorf("toolName = %q, want SessionStart:startup", items[0].ToolName)
+	}
+	if items[0].DurationMs != 116 {
+		t.Errorf("duration = %d, want 116", items[0].DurationMs)
+	}
+	if items[0].Content != "hello\nworld" {
+		t.Errorf("content = %q, want hello\\nworld", items[0].Content)
+	}
+}
+
+func TestParseLine_AttachmentUnknownSubtypeDropped(t *testing.T) {
+	line := `{"type":"attachment","timestamp":"2025-01-01T12:00:00Z","sessionId":"abc","attachment":{"type":"task_reminder","content":[],"itemCount":0}}`
+	items, err := ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("expected 0 items for unhandled subtype, got %d", len(items))
+	}
+}
+
+func TestParseLine_Diagnostics(t *testing.T) {
+	line := `{"type":"attachment","timestamp":"2025-01-01T12:00:00Z","sessionId":"abc","attachment":{"type":"diagnostics","files":[{"uri":"/path/to/foo.go","diagnostics":[{"message":"unused parameter","severity":"Info","source":"unusedparams"},{"message":"loop can be modernized","severity":"Hint","source":"rangeint"}]}]}}`
+	items, err := ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 diagnostics item, got %d", len(items))
+	}
+	if items[0].Type != TypeDiagnostics {
+		t.Errorf("type = %q, want %q", items[0].Type, TypeDiagnostics)
+	}
+	if items[0].ToolName != "foo.go (1 info, 1 hint)" {
+		t.Errorf("toolName = %q, want %q", items[0].ToolName, "foo.go (1 info, 1 hint)")
+	}
+	if !strings.Contains(items[0].Content, "[Info] unused parameter (unusedparams)") {
+		t.Errorf("content missing first diagnostic: %q", items[0].Content)
+	}
+}
+
+func TestParseLine_DebugAll(t *testing.T) {
+	prev := DebugAll
+	DebugAll = true
+	t.Cleanup(func() { DebugAll = prev })
+
+	tests := []struct {
+		name      string
+		line      string
+		wantLabel string
+	}{
+		{"unknown top-level", `{"type":"file-history-snapshot","sessionId":"s","timestamp":"2025-01-01T12:00:00Z"}`, "file-history-snapshot"},
+		{"system unknown subtype", `{"type":"system","subtype":"foo","sessionId":"s","timestamp":"2025-01-01T12:00:00Z"}`, "system:foo"},
+		{"attachment unhandled", `{"type":"attachment","sessionId":"s","timestamp":"2025-01-01T12:00:00Z","attachment":{"type":"task_reminder","content":[],"itemCount":0}}`, "attachment.task_reminder"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			items, err := ParseLine(tc.line)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(items) != 1 || items[0].Type != TypeDebug {
+				t.Fatalf("expected 1 debug item, got %+v", items)
+			}
+			if items[0].ToolName != tc.wantLabel {
+				t.Errorf("label = %q, want %q", items[0].ToolName, tc.wantLabel)
+			}
+		})
+	}
+}
+
+func TestParseLine_DebugAllSkipsHandledLines(t *testing.T) {
+	prev := DebugAll
+	DebugAll = true
+	t.Cleanup(func() { DebugAll = prev })
+
+	// pr-link is handled → should NOT also produce a debug item.
+	line := `{"type":"pr-link","sessionId":"s","prNumber":1,"prUrl":"http://x","prRepository":"a/b","timestamp":"2025-01-01T12:00:00Z"}`
+	items, _ := ParseLine(line)
+	if len(items) != 1 || items[0].Type != TypePRLink {
+		t.Fatalf("expected exactly 1 pr_link item, got %+v", items)
+	}
+}
+
+func TestParseLine_PRLink(t *testing.T) {
+	line := `{"type":"pr-link","sessionId":"abc","prNumber":13,"prUrl":"https://github.com/phiat/claude-esp/pull/13","prRepository":"phiat/claude-esp","timestamp":"2025-01-01T12:00:00Z"}`
+	items, err := ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 || items[0].Type != TypePRLink {
+		t.Fatalf("expected 1 pr_link item, got %+v", items)
+	}
+	want := "PR #13 phiat/claude-esp → https://github.com/phiat/claude-esp/pull/13"
+	if items[0].Content != want {
+		t.Errorf("content = %q, want %q", items[0].Content, want)
+	}
+}
+
+func TestParseLine_DiagnosticsEmptyFilesSkipped(t *testing.T) {
+	line := `{"type":"attachment","timestamp":"2025-01-01T12:00:00Z","sessionId":"abc","attachment":{"type":"diagnostics","files":[{"uri":"/x.go","diagnostics":[]}]}}`
+	items, _ := ParseLine(line)
+	if len(items) != 0 {
+		t.Fatalf("expected files with no diagnostics to be skipped, got %d items", len(items))
+	}
+}
+
 func TestFormatToolInput(t *testing.T) {
 	tests := []struct {
 		name     string

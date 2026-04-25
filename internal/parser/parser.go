@@ -11,16 +11,39 @@ import (
 type StreamItemType string
 
 const (
-	TypeThinking     StreamItemType = "thinking"
-	TypeToolInput    StreamItemType = "tool_input"
-	TypeToolOutput   StreamItemType = "tool_output"
-	TypeText         StreamItemType = "text"
-	TypeTurnMarker   StreamItemType = "turn_marker"   // turn boundary + duration (system.turn_duration)
-	TypeSessionTitle StreamItemType = "session_title" // session label update (agent-name / custom-title)
+	TypeThinking      StreamItemType = "thinking"
+	TypeToolInput     StreamItemType = "tool_input"
+	TypeToolOutput    StreamItemType = "tool_output"
+	TypeText          StreamItemType = "text"
+	TypeTurnMarker    StreamItemType = "turn_marker"    // turn boundary + duration (system.turn_duration)
+	TypeCompactMarker StreamItemType = "compact_marker" // conversation compaction boundary (system.compact_boundary)
+	TypeHookOutput    StreamItemType = "hook_output"    // hook execution result (attachment.hook_success)
+	TypeDiagnostics   StreamItemType = "diagnostics"    // post-edit LSP diagnostics (attachment.diagnostics)
+	TypePRLink        StreamItemType = "pr_link"        // PR creation event (type=pr-link)
+	TypeDebug         StreamItemType = "debug"          // raw line type/subtype (only emitted when DebugAll is on)
+	TypeSessionTitle  StreamItemType = "session_title"  // session label update (agent-name / custom-title)
 
 	// AgentIDDisplayLength is how many chars of agent ID to show in display name
 	AgentIDDisplayLength = 7
+
+	// debugPreviewLen caps the raw-line preview shown in TypeDebug items.
+	debugPreviewLen = 240
 )
+
+// DebugAll, when true, makes ParseLine emit a TypeDebug stream item for every
+// line whose type (or attachment subtype) is otherwise dropped by the parser.
+// Set this once at startup based on a CLI flag; safe to leave at false in
+// production. Reads/writes are not synchronized — flip before parsing starts.
+var DebugAll bool
+
+// agentDisplayName returns "Main" for the top-level session or "Agent-<id>"
+// (truncated to AgentIDDisplayLength) for subagents.
+func agentDisplayName(agentID string) string {
+	if agentID == "" {
+		return "Main"
+	}
+	return fmt.Sprintf("Agent-%s", agentID[:min(AgentIDDisplayLength, len(agentID))])
+}
 
 // StreamItem represents a single item in the output stream
 type StreamItem struct {
@@ -54,6 +77,51 @@ type RawMessage struct {
 	// and type="custom-title" lines respectively.
 	AgentTitle  string `json:"agentName,omitempty"`
 	CustomTitle string `json:"customTitle,omitempty"`
+	// CompactMetadata carries trigger + preTokens on system.compact_boundary lines.
+	CompactMetadata *CompactMetadata `json:"compactMetadata,omitempty"`
+	// Attachment carries hook output / diagnostics / etc on type="attachment" lines.
+	Attachment *Attachment `json:"attachment,omitempty"`
+	// PR link fields (type=pr-link).
+	PRNumber     int    `json:"prNumber,omitempty"`
+	PRURL        string `json:"prUrl,omitempty"`
+	PRRepository string `json:"prRepository,omitempty"`
+}
+
+// CompactMetadata describes a conversation-compaction event.
+type CompactMetadata struct {
+	Trigger   string `json:"trigger"`
+	PreTokens int64  `json:"preTokens"`
+}
+
+// Attachment is the payload on type="attachment" lines. Subtype-dependent
+// fields are kept in one struct to avoid per-subtype unmarshalling.
+type Attachment struct {
+	Type      string `json:"type"`
+	HookName  string `json:"hookName,omitempty"`
+	HookEvent string `json:"hookEvent,omitempty"`
+	// Content is omitted because subtypes disagree on its shape
+	// (hook_success: string; task_reminder: array). Use Stdout for hooks.
+	Stdout     string `json:"stdout,omitempty"`
+	Stderr     string `json:"stderr,omitempty"`
+	Command    string `json:"command,omitempty"`
+	ExitCode   int    `json:"exitCode,omitempty"`
+	DurationMs int64  `json:"durationMs,omitempty"`
+	// Diagnostics fields (attachment.type=diagnostics)
+	Files []DiagnosticFile `json:"files,omitempty"`
+}
+
+// DiagnosticFile is one file's worth of LSP diagnostics.
+type DiagnosticFile struct {
+	URI         string       `json:"uri"`
+	Diagnostics []Diagnostic `json:"diagnostics"`
+}
+
+// Diagnostic is a single LSP finding.
+type Diagnostic struct {
+	Message  string `json:"message"`
+	Severity string `json:"severity"`
+	Source   string `json:"source"`
+	Code     string `json:"code"`
 }
 
 // RawToolUseResult represents the toolUseResult field on user messages
@@ -148,13 +216,169 @@ func ParseLine(line string) ([]StreamItem, error) {
 		items = parseUserMessage(raw, timestamp)
 	case "system":
 		items = parseSystemMessage(raw, timestamp)
+		if DebugAll && len(items) == 0 {
+			items = []StreamItem{debugItem(raw, line, timestamp)}
+		}
 	case "agent-name":
 		items = parseSessionTitle(raw, timestamp, raw.AgentTitle)
 	case "custom-title":
 		items = parseSessionTitle(raw, timestamp, raw.CustomTitle)
+	case "attachment":
+		items = parseAttachment(raw, timestamp)
+		if DebugAll && len(items) == 0 {
+			items = []StreamItem{debugItem(raw, line, timestamp)}
+		}
+	case "pr-link":
+		items = parsePRLink(raw, timestamp)
+	default:
+		if DebugAll {
+			items = []StreamItem{debugItem(raw, line, timestamp)}
+		}
 	}
 
 	return items, nil
+}
+
+// debugItem builds a TypeDebug stream item describing a line that the parser
+// would otherwise drop. The label is "<type>" or "<type>:<subtype>" for system
+// lines, or "attachment.<subtype>" for attachments. Content is a truncated
+// raw-JSON preview to help diagnose new fields.
+func debugItem(raw RawMessage, line string, timestamp time.Time) StreamItem {
+	label := raw.Type
+	switch {
+	case raw.Type == "system" && raw.Subtype != "":
+		label = "system:" + raw.Subtype
+	case raw.Type == "attachment" && raw.Attachment != nil && raw.Attachment.Type != "":
+		label = "attachment." + raw.Attachment.Type
+	}
+	preview := line
+	if len(preview) > debugPreviewLen {
+		preview = preview[:debugPreviewLen] + "…"
+	}
+	agentName := agentDisplayName(raw.AgentID)
+	return StreamItem{
+		Type:      TypeDebug,
+		SessionID: raw.SessionID,
+		AgentID:   raw.AgentID,
+		AgentName: agentName,
+		Timestamp: timestamp,
+		ToolName:  label,
+		Content:   preview,
+	}
+}
+
+// parseAttachment dispatches on attachment.type. Surfaces hook_success and
+// diagnostics; every other subtype is intentionally dropped (the DebugAll
+// flag will surface the rest as TypeDebug items).
+func parseAttachment(raw RawMessage, timestamp time.Time) []StreamItem {
+	if raw.Attachment == nil {
+		return nil
+	}
+	agentName := agentDisplayName(raw.AgentID)
+
+	switch raw.Attachment.Type {
+	case "hook_success":
+		body := raw.Attachment.Stdout
+		return []StreamItem{{
+			Type:       TypeHookOutput,
+			SessionID:  raw.SessionID,
+			AgentID:    raw.AgentID,
+			AgentName:  agentName,
+			Timestamp:  timestamp,
+			ToolName:   raw.Attachment.HookName,
+			Content:    body,
+			DurationMs: raw.Attachment.DurationMs,
+		}}
+	case "diagnostics":
+		return diagnosticsItems(raw, timestamp, agentName)
+	}
+	return nil
+}
+
+// diagnosticsItems turns one diagnostics attachment (potentially multi-file)
+// into one StreamItem per file. Files with zero diagnostics are skipped.
+func diagnosticsItems(raw RawMessage, timestamp time.Time, agentName string) []StreamItem {
+	var items []StreamItem
+	for _, f := range raw.Attachment.Files {
+		if len(f.Diagnostics) == 0 {
+			continue
+		}
+		items = append(items, StreamItem{
+			Type:      TypeDiagnostics,
+			SessionID: raw.SessionID,
+			AgentID:   raw.AgentID,
+			AgentName: agentName,
+			Timestamp: timestamp,
+			ToolName:  diagnosticsHeader(f),
+			Content:   diagnosticsBody(f.Diagnostics),
+		})
+	}
+	return items
+}
+
+// diagnosticsHeader returns "<file> (2 errors, 5 hints)".
+func diagnosticsHeader(f DiagnosticFile) string {
+	counts := map[string]int{}
+	for _, d := range f.Diagnostics {
+		counts[strings.ToLower(d.Severity)]++
+	}
+	var parts []string
+	for _, sev := range []string{"error", "warning", "info", "hint"} {
+		if n := counts[sev]; n > 0 {
+			label := sev + "s"
+			if n == 1 {
+				label = sev
+			}
+			parts = append(parts, fmt.Sprintf("%d %s", n, label))
+		}
+	}
+	name := f.URI
+	if i := strings.LastIndex(name, "/"); i >= 0 {
+		name = name[i+1:]
+	}
+	if len(parts) == 0 {
+		return name
+	}
+	return fmt.Sprintf("%s (%s)", name, strings.Join(parts, ", "))
+}
+
+// diagnosticsBody renders each diagnostic as "[severity] message (source)".
+func diagnosticsBody(ds []Diagnostic) string {
+	lines := make([]string, 0, len(ds))
+	for _, d := range ds {
+		sev := d.Severity
+		if sev == "" {
+			sev = "?"
+		}
+		line := fmt.Sprintf("[%s] %s", sev, d.Message)
+		if d.Source != "" {
+			line += fmt.Sprintf(" (%s)", d.Source)
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// parsePRLink emits a TypePRLink marker for type="pr-link" events.
+func parsePRLink(raw RawMessage, timestamp time.Time) []StreamItem {
+	if raw.PRNumber == 0 && raw.PRURL == "" {
+		return nil
+	}
+	var content string
+	switch {
+	case raw.PRRepository != "" && raw.PRURL != "":
+		content = fmt.Sprintf("PR #%d %s → %s", raw.PRNumber, raw.PRRepository, raw.PRURL)
+	case raw.PRURL != "":
+		content = fmt.Sprintf("PR #%d → %s", raw.PRNumber, raw.PRURL)
+	default:
+		content = fmt.Sprintf("PR #%d", raw.PRNumber)
+	}
+	return []StreamItem{{
+		Type:      TypePRLink,
+		SessionID: raw.SessionID,
+		Timestamp: timestamp,
+		Content:   content,
+	}}
 }
 
 // parseSessionTitle emits a TypeSessionTitle item carrying a human-readable
@@ -172,24 +396,64 @@ func parseSessionTitle(raw RawMessage, timestamp time.Time, title string) []Stre
 	}}
 }
 
-// parseSystemMessage handles system-type JSONL lines. Currently surfaces only
-// subtype=turn_duration (emitted when a full assistant turn finishes) as a
-// subtle marker in the stream. Other subtypes are intentionally dropped.
+// parseSystemMessage handles system-type JSONL lines. Surfaces:
+//   - subtype=turn_duration → TypeTurnMarker (turn ended + duration)
+//   - subtype=compact_boundary → TypeCompactMarker (auto/manual compaction with preTokens)
+//
+// Other subtypes are intentionally dropped.
 func parseSystemMessage(raw RawMessage, timestamp time.Time) []StreamItem {
-	if raw.Subtype != "turn_duration" {
-		return nil
+	agentName := agentDisplayName(raw.AgentID)
+
+	switch raw.Subtype {
+	case "turn_duration":
+		return []StreamItem{{
+			Type:       TypeTurnMarker,
+			SessionID:  raw.SessionID,
+			AgentID:    raw.AgentID,
+			AgentName:  agentName,
+			Timestamp:  timestamp,
+			DurationMs: raw.DurationMs,
+		}}
+	case "compact_boundary":
+		content := formatCompactSummary(raw.CompactMetadata)
+		return []StreamItem{{
+			Type:      TypeCompactMarker,
+			SessionID: raw.SessionID,
+			AgentID:   raw.AgentID,
+			AgentName: agentName,
+			Timestamp: timestamp,
+			Content:   content,
+		}}
 	}
-	agentName := "Main"
-	if raw.AgentID != "" {
-		agentName = fmt.Sprintf("Agent-%s", raw.AgentID[:min(AgentIDDisplayLength, len(raw.AgentID))])
+	return nil
+}
+
+// formatCompactSummary renders compaction metadata into a short label like
+// "auto, 179k pre-tokens". Returns "" when no metadata is present.
+func formatCompactSummary(m *CompactMetadata) string {
+	if m == nil {
+		return ""
 	}
-	return []StreamItem{{
-		Type:       TypeTurnMarker,
-		AgentID:    raw.AgentID,
-		AgentName:  agentName,
-		Timestamp:  timestamp,
-		DurationMs: raw.DurationMs,
-	}}
+	var parts []string
+	if m.Trigger != "" {
+		parts = append(parts, m.Trigger)
+	}
+	if m.PreTokens > 0 {
+		parts = append(parts, fmt.Sprintf("%s pre-tokens", formatTokenCount(m.PreTokens)))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// formatTokenCount renders a token count as 1.2k / 179k / 2.3M.
+func formatTokenCount(n int64) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	case n >= 1_000:
+		return fmt.Sprintf("%dk", n/1_000)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
 }
 
 func parseAssistantMessage(raw RawMessage, timestamp time.Time) []StreamItem {
@@ -199,10 +463,7 @@ func parseAssistantMessage(raw RawMessage, timestamp time.Time) []StreamItem {
 	}
 
 	var items []StreamItem
-	agentName := "Main"
-	if raw.AgentID != "" {
-		agentName = fmt.Sprintf("Agent-%s", raw.AgentID[:min(AgentIDDisplayLength, len(raw.AgentID))])
-	}
+	agentName := agentDisplayName(raw.AgentID)
 
 	for _, block := range msg.Content {
 		switch block.Type {
@@ -270,10 +531,7 @@ func parseUserMessage(raw RawMessage, timestamp time.Time) []StreamItem {
 	}
 
 	var items []StreamItem
-	agentName := "Main"
-	if raw.AgentID != "" {
-		agentName = fmt.Sprintf("Agent-%s", raw.AgentID[:min(AgentIDDisplayLength, len(raw.AgentID))])
-	}
+	agentName := agentDisplayName(raw.AgentID)
 
 	for _, result := range results {
 		if result.Type == "tool_result" {
