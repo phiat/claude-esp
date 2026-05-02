@@ -60,6 +60,7 @@ type StreamItem struct {
 	OutputTokens        int64  // usage.output_tokens from assistant messages
 	CacheCreationTokens int64  // usage.cache_creation_input_tokens
 	CacheReadTokens     int64  // usage.cache_read_input_tokens
+	Model               string // message.model from assistant messages (e.g. "claude-opus-4-7")
 }
 
 // RawMessage represents a line from the JSONL file
@@ -132,6 +133,7 @@ type RawToolUseResult struct {
 // AssistantMessage represents the message field for assistant responses
 type AssistantMessage struct {
 	Role    string         `json:"role"`
+	Model   string         `json:"model,omitempty"`
 	Content []ContentBlock `json:"content"`
 	Usage   *UsageInfo     `json:"usage,omitempty"`
 }
@@ -456,6 +458,26 @@ func formatTokenCount(n int64) string {
 	}
 }
 
+// ContextWindowFor returns the max context window in tokens for a given
+// Claude model identifier. Defaults to 200k for unknown models (the safe
+// minimum across the lineup). Update this table when new models ship.
+//
+// Matched by prefix so dated suffixes like "-20251001" or future point
+// releases of the same family resolve correctly.
+func ContextWindowFor(model string) int64 {
+	switch {
+	case strings.HasPrefix(model, "claude-opus-4-7"),
+		strings.HasPrefix(model, "claude-sonnet-4-6"):
+		return 1_000_000
+	case strings.HasPrefix(model, "claude-haiku-4-5"),
+		strings.HasPrefix(model, "claude-opus-4-6"),
+		strings.HasPrefix(model, "claude-sonnet-4-5"),
+		strings.HasPrefix(model, "claude-haiku-4"):
+		return 200_000
+	}
+	return 200_000
+}
+
 func parseAssistantMessage(raw RawMessage, timestamp time.Time) []StreamItem {
 	var msg AssistantMessage
 	if err := json.Unmarshal(raw.Message, &msg); err != nil {
@@ -501,12 +523,15 @@ func parseAssistantMessage(raw RawMessage, timestamp time.Time) []StreamItem {
 		}
 	}
 
-	// Attach token usage to the first item only
+	// Attach token usage + model to the first item only
 	if len(items) > 0 && msg.Usage != nil {
 		items[0].InputTokens = msg.Usage.InputTokens
 		items[0].OutputTokens = msg.Usage.OutputTokens
 		items[0].CacheCreationTokens = msg.Usage.CacheCreationInputTokens
 		items[0].CacheReadTokens = msg.Usage.CacheReadInputTokens
+	}
+	if len(items) > 0 && msg.Model != "" && msg.Model != "<synthetic>" {
+		items[0].Model = msg.Model
 	}
 
 	return items

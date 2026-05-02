@@ -53,7 +53,7 @@ func NewModel(sessionID string, skipHistory bool, pollInterval time.Duration, ac
 		stream:        NewStreamView(),
 		focus:         FocusStream,
 		showTree:      true,
-		treeWidth:     25,
+		treeWidth:     30,
 		sessionID:     sessionID,
 		skipHistory:   skipHistory,
 		pollInterval:  pollInterval,
@@ -156,6 +156,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if item.CacheReadTokens > 0 {
 			m.totalCacheRead += item.CacheReadTokens
+		}
+		// Per-agent context size: latest snapshot, not a sum. The prompt
+		// size for a turn is input + cache_creation + cache_read; output
+		// tokens don't fill the context window.
+		if item.Model != "" {
+			ctx := item.InputTokens + item.CacheCreationTokens + item.CacheReadTokens
+			if ctx > 0 {
+				m.tree.UpdateContext(item.SessionID, item.AgentID, ctx, parser.ContextWindowFor(item.Model))
+			}
 		}
 		m.stream.AddItem(item)
 		m.stream.SetEnabledFilters(m.tree.GetEnabledFilters())
