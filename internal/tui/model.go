@@ -566,11 +566,14 @@ func formatTokenCount(n int64) string {
 }
 
 func (m *Model) renderToggle(name string, enabled bool, key string) string {
-	checkbox := "☐"
-	if enabled {
-		checkbox = "☑"
+	// Drop the ☑/☐ checkbox column — disabled toggles get a leading
+	// mid-dot marker, enabled toggles a leading space, so the bar's
+	// column widths stay aligned without the checkbox.
+	marker := " "
+	if !enabled {
+		marker = "·"
 	}
-	return fmt.Sprintf("%s %s[%s]", checkbox, name, key)
+	return fmt.Sprintf("%s%s[%s]", marker, name, key)
 }
 
 func (m *Model) renderWithTree() string {
