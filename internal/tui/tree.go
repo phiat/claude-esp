@@ -39,6 +39,13 @@ type TreeNode struct {
 	OutputPath    string // path to tool-results file
 	IsComplete    bool   // whether the task has finished
 
+	// Per-agent context size (Main/Agent nodes only). ContextTokens is the
+	// most recent input+cache_creation+cache_read snapshot for this agent;
+	// ContextWindow is the model's max context window in tokens. Both are
+	// zero until at least one assistant message with usage info has arrived.
+	ContextTokens int64
+	ContextWindow int64
+
 	// Session-only collapse state (used by -c / auto-collapse feature).
 	// Collapsed: children are hidden from tree navigation and stream filtering.
 	// Pinned: user manually expanded this session; suppress auto-collapse until
@@ -487,6 +494,32 @@ func (t *TreeView) RemoveSession(sessionID string) {
 	t.rebuildNodeList()
 }
 
+// UpdateContext sets the latest context-size snapshot for a Main/Agent node.
+// agentID == "" targets the session's Main node; otherwise the matching Agent.
+// Tokens overwrite (not accumulate) — context size is a rolling snapshot,
+// not a sum. window is the model's max context window from
+// parser.ContextWindowFor.
+func (t *TreeView) UpdateContext(sessionID, agentID string, tokens, window int64) {
+	for _, session := range t.Root.Children {
+		if session.Type != NodeTypeSession || session.ID != sessionID {
+			continue
+		}
+		for _, child := range session.Children {
+			if agentID == "" && child.Type == NodeTypeMain {
+				child.ContextTokens = tokens
+				child.ContextWindow = window
+				return
+			}
+			if agentID != "" && child.Type == NodeTypeAgent && child.ID == agentID {
+				child.ContextTokens = tokens
+				child.ContextWindow = window
+				return
+			}
+		}
+		return
+	}
+}
+
 // UpdateActivity updates the active status of nodes and re-sorts them
 func (t *TreeView) UpdateActivity(sessionID, agentID string, isActive bool) {
 	// Find the session
@@ -615,14 +648,6 @@ func (t *TreeView) View() string {
 		}
 		indent := strings.Repeat("  ", depth)
 
-		// Checkbox
-		checkbox := "☑"
-		checkStyle := treeCheckedStyle
-		if !node.Enabled {
-			checkbox = "☐"
-			checkStyle = treeUncheckedStyle
-		}
-
 		// Tree branch character
 		branch := ""
 		if depth > 0 {
@@ -685,21 +710,42 @@ func (t *TreeView) View() string {
 			name = mutedStyle.Render(node.Name)
 		}
 
-		line := fmt.Sprintf("%s%s%s %s%s",
+		line := fmt.Sprintf("%s%s%s%s",
 			indent,
 			branch,
-			checkStyle.Render(checkbox),
 			icon,
 			name,
 		)
 
-		// Apply selection style
-		if i == t.cursor {
+		// Context-size suffix for Main/Agent nodes (e.g. "  142k/1M").
+		// Right-aligned when the line fits; appended otherwise. Truncation
+		// of over-wide lines (below) handles the worst case.
+		ctxSuffix := contextSuffix(node)
+		if ctxSuffix != "" && t.width > 0 {
+			innerWidth := t.width - 4
+			if innerWidth < 1 {
+				innerWidth = 1
+			}
+			used := lipglossWidth(line)
+			suffixW := lipglossWidth(ctxSuffix)
+			gap := innerWidth - used - suffixW
+			if gap >= 1 {
+				line += strings.Repeat(" ", gap) + mutedStyle.Render(ctxSuffix)
+			} else {
+				line += " " + mutedStyle.Render(ctxSuffix)
+			}
+		}
+
+		// Apply selection style. With the checkbox gone, disabled rows are
+		// muted so the user still has a visual signal for what they've
+		// toggled off (in addition to the inactive-children muting).
+		switch {
+		case i == t.cursor:
 			line = treeSelectedStyle.Render(line)
-		} else if !node.IsActive && node.Type != NodeTypeSession {
-			// Keep inactive agents muted even without selection
+		case !node.Enabled,
+			!node.IsActive && node.Type != NodeTypeSession:
 			line = mutedStyle.Render(line)
-		} else {
+		default:
 			line = treeNormalStyle.Render(line)
 		}
 
@@ -784,6 +830,21 @@ func (t *TreeView) isLastChild(node *TreeNode) bool {
 	}
 	children := node.Parent.Children
 	return len(children) > 0 && children[len(children)-1] == node
+}
+
+// contextSuffix returns "14%" for Main/Agent nodes once we've seen at least
+// one assistant message with usage info. Percentage of the model's max
+// context window used (input + cache_creation + cache_read / window).
+// Returns "" for sessions, background tasks, and agents with no usage yet.
+func contextSuffix(node *TreeNode) string {
+	if node.Type != NodeTypeMain && node.Type != NodeTypeAgent {
+		return ""
+	}
+	if node.ContextTokens <= 0 || node.ContextWindow <= 0 {
+		return ""
+	}
+	pct := node.ContextTokens * 100 / node.ContextWindow
+	return fmt.Sprintf("%d%%", pct)
 }
 
 // lipglossWidth calculates visible width accounting for ANSI codes

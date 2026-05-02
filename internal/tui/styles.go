@@ -79,10 +79,6 @@ var (
 				Bold(true)
 	treeNormalStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#D1D5DB"))
-	treeCheckedStyle = lipgloss.NewStyle().
-				Foreground(secondaryColor)
-	treeUncheckedStyle = lipgloss.NewStyle().
-				Foreground(mutedColor)
 
 	// Border styles
 	treeBorderStyle = lipgloss.NewStyle().
