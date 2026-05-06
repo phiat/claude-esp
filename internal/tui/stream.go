@@ -176,6 +176,9 @@ func (s *StreamView) IsAutoScrollEnabled() bool {
 func (s *StreamView) updateContent() {
 	var b strings.Builder
 	contentWidth := s.width - 4 // account for borders and padding
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
 
 	for _, item := range s.items {
 		// Check session/agent filter
@@ -339,7 +342,11 @@ func (s *StreamView) renderItem(item parser.StreamItem, width int) string {
 	}
 
 	// Add separator line
-	b.WriteString("\n" + separatorStyle.Render(strings.Repeat("─", min(width, 60))))
+	sepWidth := min(width, 60)
+	if sepWidth < 0 {
+		sepWidth = 0
+	}
+	b.WriteString("\n" + separatorStyle.Render(strings.Repeat("─", sepWidth)))
 
 	return b.String()
 }
