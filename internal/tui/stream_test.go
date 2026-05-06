@@ -244,6 +244,37 @@ func TestTruncateContent_Emoji(t *testing.T) {
 	}
 }
 
+// TestStreamView_NarrowResizeDoesNotPanic guards against a regression where
+// SetSize stored a small/negative raw width in s.width while clamping only
+// the viewport, causing strings.Repeat in renderItem to panic with
+// "negative Repeat count" once an item was rendered.
+func TestStreamView_NarrowResizeDoesNotPanic(t *testing.T) {
+	s := NewStreamView()
+	s.SetSize(80, 24)
+	s.SetEnabledFilters([]EnabledFilter{{SessionID: "sess1", AgentID: ""}})
+	// Cover every render branch that uses width.
+	for _, typ := range []parser.StreamItemType{
+		parser.TypeThinking,
+		parser.TypeToolInput,
+		parser.TypeToolOutput,
+		parser.TypeText,
+		parser.TypeHookOutput,
+		parser.TypeDiagnostics,
+		parser.TypeDebug,
+	} {
+		s.AddItem(newTestItem(typ, "sess1", "", "content"))
+	}
+
+	// Each width here corresponds to a real callsite scenario where
+	// model.go passes m.width-m.treeWidth-5 (or similar) and the result
+	// underflows the inner content width.
+	for _, width := range []int{0, 1, 2, 3, 4, 5, -1, -10} {
+		// Should never panic, even with an unrenderably narrow width.
+		s.SetSize(width, 5)
+		_ = s.View()
+	}
+}
+
 func TestStreamView_ToggleStates(t *testing.T) {
 	s := NewStreamView()
 
