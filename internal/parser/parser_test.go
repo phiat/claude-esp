@@ -731,3 +731,169 @@ func TestParseLine_UserMessageHasNoTokens(t *testing.T) {
 		t.Errorf("OutputTokens = %d, want 0 (user messages don't have usage)", item.OutputTokens)
 	}
 }
+
+func TestParseLine_CacheMiss_ToolsChanged(t *testing.T) {
+	line := `{"type":"assistant","timestamp":"2025-01-01T12:00:00Z","sessionId":"s","message":{"role":"assistant","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":6,"output_tokens":5,"cache_creation_input_tokens":58861},"diagnostics":{"cache_miss_reason":{"type":"tools_changed","cache_missed_input_tokens":51402}}}}`
+	items, err := ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected text + cache_miss item, got %d", len(items))
+	}
+	if items[0].Type != TypeText {
+		t.Errorf("items[0].Type = %q, want %q", items[0].Type, TypeText)
+	}
+	if items[1].Type != TypeCacheMiss {
+		t.Errorf("items[1].Type = %q, want %q", items[1].Type, TypeCacheMiss)
+	}
+	if items[1].Content != "tools_changed, +51k tokens" {
+		t.Errorf("content = %q, want %q", items[1].Content, "tools_changed, +51k tokens")
+	}
+}
+
+func TestParseLine_CacheMiss_PreviousMessageNotFound_NoTokens(t *testing.T) {
+	// previous_message_not_found sometimes lacks cache_missed_input_tokens —
+	// detail should reduce to the bare reason string.
+	line := `{"type":"assistant","timestamp":"2025-01-01T12:00:00Z","sessionId":"s","message":{"role":"assistant","content":[{"type":"text","text":"hi"}],"diagnostics":{"cache_miss_reason":{"type":"previous_message_not_found"}}}}`
+	items, err := ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 2 || items[1].Type != TypeCacheMiss {
+		t.Fatalf("expected text + cache_miss, got %+v", items)
+	}
+	if items[1].Content != "previous_message_not_found" {
+		t.Errorf("content = %q, want %q", items[1].Content, "previous_message_not_found")
+	}
+}
+
+func TestParseLine_CacheMiss_NullDiagnosticsSkipped(t *testing.T) {
+	// diagnostics:null (the default on healthy assistant messages) must not
+	// emit a cache-miss marker.
+	line := `{"type":"assistant","timestamp":"2025-01-01T12:00:00Z","sessionId":"s","message":{"role":"assistant","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":1,"output_tokens":1},"diagnostics":null}}`
+	items, err := ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item (no cache_miss), got %d", len(items))
+	}
+	if items[0].Type != TypeText {
+		t.Errorf("type = %q, want text", items[0].Type)
+	}
+}
+
+func TestParseLine_QueueOperation_Enqueue(t *testing.T) {
+	line := `{"type":"queue-operation","operation":"enqueue","timestamp":"2025-01-01T12:00:00Z","sessionId":"s","content":"then do a review"}`
+	items, err := ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 || items[0].Type != TypeSessionEvent {
+		t.Fatalf("expected 1 session_event, got %+v", items)
+	}
+	if items[0].ToolName != "queued" {
+		t.Errorf("label = %q, want queued", items[0].ToolName)
+	}
+	if items[0].Content != "then do a review" {
+		t.Errorf("content = %q", items[0].Content)
+	}
+}
+
+func TestParseLine_QueueOperation_Remove(t *testing.T) {
+	line := `{"type":"queue-operation","operation":"remove","timestamp":"2025-01-01T12:00:00Z","sessionId":"s"}`
+	items, _ := ParseLine(line)
+	if len(items) != 1 || items[0].ToolName != "dequeued" {
+		t.Fatalf("expected 1 dequeued event, got %+v", items)
+	}
+	if items[0].Content != "" {
+		t.Errorf("dequeue should have empty content, got %q", items[0].Content)
+	}
+}
+
+func TestParseLine_QueueOperation_TaskNotificationDropped(t *testing.T) {
+	// task-notification re-injections show up as queue-operation enqueues
+	// but aren't user-typed prompts — drop them.
+	line := `{"type":"queue-operation","operation":"enqueue","timestamp":"2025-01-01T12:00:00Z","sessionId":"s","content":"<task-notification>\n<task-id>x</task-id>\n</task-notification>"}`
+	items, _ := ParseLine(line)
+	if len(items) != 0 {
+		t.Fatalf("expected 0 items, got %+v", items)
+	}
+}
+
+func TestParseLine_PlanModeExit_Saved(t *testing.T) {
+	line := `{"type":"attachment","timestamp":"2025-01-01T12:00:00Z","sessionId":"s","attachment":{"type":"plan_mode_exit","planFilePath":"/p.md","planExists":true}}`
+	items, _ := ParseLine(line)
+	if len(items) != 1 || items[0].ToolName != "plan mode exit" {
+		t.Fatalf("expected plan mode exit, got %+v", items)
+	}
+	if items[0].Content != "saved" {
+		t.Errorf("content = %q, want saved", items[0].Content)
+	}
+}
+
+func TestParseLine_PlanModeExit_Unsaved(t *testing.T) {
+	line := `{"type":"attachment","timestamp":"2025-01-01T12:00:00Z","sessionId":"s","attachment":{"type":"plan_mode_exit","planExists":false}}`
+	items, _ := ParseLine(line)
+	if len(items) != 1 || items[0].Content != "" {
+		t.Fatalf("expected empty content for unsaved plan exit, got %+v", items)
+	}
+}
+
+func TestParseLine_AutoMode(t *testing.T) {
+	line := `{"type":"attachment","timestamp":"2025-01-01T12:00:00Z","sessionId":"s","attachment":{"type":"auto_mode"}}`
+	items, _ := ParseLine(line)
+	if len(items) != 1 || items[0].ToolName != "auto mode" {
+		t.Fatalf("expected auto mode event, got %+v", items)
+	}
+}
+
+func TestParseLine_DeferredToolsDelta(t *testing.T) {
+	line := `{"type":"attachment","timestamp":"2025-01-01T12:00:00Z","sessionId":"s","attachment":{"type":"deferred_tools_delta","addedNames":["A","B","C"],"removedNames":["D"]}}`
+	items, _ := ParseLine(line)
+	if len(items) != 1 || items[0].ToolName != "tools" {
+		t.Fatalf("expected tools delta event, got %+v", items)
+	}
+	if items[0].Content != "+3 -1" {
+		t.Errorf("content = %q, want %q", items[0].Content, "+3 -1")
+	}
+}
+
+func TestParseLine_DeferredToolsDelta_EmptyDropped(t *testing.T) {
+	line := `{"type":"attachment","timestamp":"2025-01-01T12:00:00Z","sessionId":"s","attachment":{"type":"deferred_tools_delta","addedNames":[],"removedNames":[]}}`
+	items, _ := ParseLine(line)
+	if len(items) != 0 {
+		t.Fatalf("expected 0 items for empty delta, got %+v", items)
+	}
+}
+
+func TestParseLine_MCPInstructionsDelta(t *testing.T) {
+	line := `{"type":"attachment","timestamp":"2025-01-01T12:00:00Z","sessionId":"s","attachment":{"type":"mcp_instructions_delta","addedNames":["plugin:context7:context7"]}}`
+	items, _ := ParseLine(line)
+	if len(items) != 1 || items[0].ToolName != "MCP" {
+		t.Fatalf("expected MCP delta event, got %+v", items)
+	}
+	if items[0].Content != "+1" {
+		t.Errorf("content = %q, want %q", items[0].Content, "+1")
+	}
+}
+
+func TestParseLine_SkillListing_InitialDropped(t *testing.T) {
+	line := `{"type":"attachment","timestamp":"2025-01-01T12:00:00Z","sessionId":"s","attachment":{"type":"skill_listing","skillCount":49,"isInitial":true}}`
+	items, _ := ParseLine(line)
+	if len(items) != 0 {
+		t.Fatalf("expected 0 items for initial skill listing, got %+v", items)
+	}
+}
+
+func TestParseLine_SkillListing_UpdateSurfaces(t *testing.T) {
+	line := `{"type":"attachment","timestamp":"2025-01-01T12:00:00Z","sessionId":"s","attachment":{"type":"skill_listing","skillCount":50,"isInitial":false}}`
+	items, _ := ParseLine(line)
+	if len(items) != 1 || items[0].ToolName != "skills" {
+		t.Fatalf("expected skills event, got %+v", items)
+	}
+	if items[0].Content != "50 total" {
+		t.Errorf("content = %q, want %q", items[0].Content, "50 total")
+	}
+}

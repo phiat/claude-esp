@@ -22,6 +22,8 @@ const (
 	TypePRLink        StreamItemType = "pr_link"        // PR creation event (type=pr-link)
 	TypeDebug         StreamItemType = "debug"          // raw line type/subtype (only emitted when DebugAll is on)
 	TypeSessionTitle  StreamItemType = "session_title"  // session label update (agent-name / custom-title)
+	TypeCacheMiss     StreamItemType = "cache_miss"     // prompt-cache invalidation (assistant.diagnostics.cache_miss_reason)
+	TypeSessionEvent  StreamItemType = "session_event"  // misc session-state change (queue-op, plan/auto mode, tool/MCP/skill deltas, permission mode)
 
 	// AgentIDDisplayLength is how many chars of agent ID to show in display name
 	AgentIDDisplayLength = 7
@@ -86,6 +88,10 @@ type RawMessage struct {
 	PRNumber     int    `json:"prNumber,omitempty"`
 	PRURL        string `json:"prUrl,omitempty"`
 	PRRepository string `json:"prRepository,omitempty"`
+	// Queue-operation fields (type="queue-operation"): "enqueue" or "remove",
+	// with the queued prompt body in Content.
+	Operation    string `json:"operation,omitempty"`
+	QueueContent string `json:"content,omitempty"`
 }
 
 // CompactMetadata describes a conversation-compaction event.
@@ -109,6 +115,16 @@ type Attachment struct {
 	DurationMs int64  `json:"durationMs,omitempty"`
 	// Diagnostics fields (attachment.type=diagnostics)
 	Files []DiagnosticFile `json:"files,omitempty"`
+	// plan_mode_exit
+	PlanFilePath string `json:"planFilePath,omitempty"`
+	PlanExists   bool   `json:"planExists,omitempty"`
+	// deferred_tools_delta and mcp_instructions_delta share these
+	AddedNames   []string `json:"addedNames,omitempty"`
+	RemovedNames []string `json:"removedNames,omitempty"`
+	ReaddedNames []string `json:"readdedNames,omitempty"`
+	// skill_listing
+	SkillCount int  `json:"skillCount,omitempty"`
+	IsInitial  bool `json:"isInitial,omitempty"`
 }
 
 // DiagnosticFile is one file's worth of LSP diagnostics.
@@ -132,10 +148,11 @@ type RawToolUseResult struct {
 
 // AssistantMessage represents the message field for assistant responses
 type AssistantMessage struct {
-	Role    string         `json:"role"`
-	Model   string         `json:"model,omitempty"`
-	Content []ContentBlock `json:"content"`
-	Usage   *UsageInfo     `json:"usage,omitempty"`
+	Role        string                `json:"role"`
+	Model       string                `json:"model,omitempty"`
+	Content     []ContentBlock        `json:"content"`
+	Usage       *UsageInfo            `json:"usage,omitempty"`
+	Diagnostics *AssistantDiagnostics `json:"diagnostics,omitempty"`
 }
 
 // UsageInfo represents token usage from assistant messages
@@ -144,6 +161,21 @@ type UsageInfo struct {
 	OutputTokens             int64 `json:"output_tokens"`
 	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
 	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+}
+
+// AssistantDiagnostics carries the diagnostics object on assistant messages.
+// Present (non-null) when the prompt cache busts; CacheMissReason explains
+// why and how many tokens had to be re-sent.
+type AssistantDiagnostics struct {
+	CacheMissReason *CacheMissReason `json:"cache_miss_reason,omitempty"`
+}
+
+// CacheMissReason carries the cache-invalidation cause. Observed values for
+// Type: "tools_changed" (tool list mutated mid-session, common after
+// ToolSearch); "previous_message_not_found" (broken parent chain).
+type CacheMissReason struct {
+	Type                   string `json:"type"`
+	CacheMissedInputTokens int64  `json:"cache_missed_input_tokens,omitempty"`
 }
 
 // ContentBlock represents a single content item in assistant response
@@ -232,6 +264,8 @@ func ParseLine(line string) ([]StreamItem, error) {
 		}
 	case "pr-link":
 		items = parsePRLink(raw, timestamp)
+	case "queue-operation":
+		items = parseQueueOperation(raw, timestamp)
 	default:
 		if DebugAll {
 			items = []StreamItem{debugItem(raw, line, timestamp)}
@@ -293,6 +327,88 @@ func parseAttachment(raw RawMessage, timestamp time.Time) []StreamItem {
 		}}
 	case "diagnostics":
 		return diagnosticsItems(raw, timestamp, agentName)
+	case "plan_mode_exit":
+		return sessionEvent(raw, timestamp, agentName, "plan mode exit", planModeExitDetail(raw.Attachment))
+	case "auto_mode":
+		return sessionEvent(raw, timestamp, agentName, "auto mode", "")
+	case "deferred_tools_delta":
+		if detail := nameDeltaDetail(raw.Attachment); detail != "" {
+			return sessionEvent(raw, timestamp, agentName, "tools", detail)
+		}
+	case "mcp_instructions_delta":
+		if detail := nameDeltaDetail(raw.Attachment); detail != "" {
+			return sessionEvent(raw, timestamp, agentName, "MCP", detail)
+		}
+	case "skill_listing":
+		// Initial listing is the session-start bulk dump — drop.
+		// Updates surface as a compact count.
+		if !raw.Attachment.IsInitial && raw.Attachment.SkillCount > 0 {
+			return sessionEvent(raw, timestamp, agentName, "skills", fmt.Sprintf("%d total", raw.Attachment.SkillCount))
+		}
+	}
+	return nil
+}
+
+// sessionEvent builds a TypeSessionEvent marker. label goes in ToolName so
+// the renderer can show "<label>: <detail>" or just "<label>" when detail
+// is empty.
+func sessionEvent(raw RawMessage, timestamp time.Time, agentName, label, detail string) []StreamItem {
+	return []StreamItem{{
+		Type:      TypeSessionEvent,
+		SessionID: raw.SessionID,
+		AgentID:   raw.AgentID,
+		AgentName: agentName,
+		Timestamp: timestamp,
+		ToolName:  label,
+		Content:   detail,
+	}}
+}
+
+// planModeExitDetail returns "saved" when the plan was written to disk,
+// otherwise "" so the marker reads simply "plan mode exit".
+func planModeExitDetail(a *Attachment) string {
+	if a != nil && a.PlanExists {
+		return "saved"
+	}
+	return ""
+}
+
+// nameDeltaDetail summarises added/removed/readded name lists into a compact
+// "+3 -1" detail. Returns "" when nothing changed (caller should drop the
+// event).
+func nameDeltaDetail(a *Attachment) string {
+	if a == nil {
+		return ""
+	}
+	var parts []string
+	if n := len(a.AddedNames); n > 0 {
+		parts = append(parts, fmt.Sprintf("+%d", n))
+	}
+	if n := len(a.RemovedNames); n > 0 {
+		parts = append(parts, fmt.Sprintf("-%d", n))
+	}
+	if n := len(a.ReaddedNames); n > 0 {
+		parts = append(parts, fmt.Sprintf("~%d", n))
+	}
+	return strings.Join(parts, " ")
+}
+
+// parseQueueOperation surfaces top-level type="queue-operation" lines, which
+// CC emits when the user enqueues a follow-up prompt or removes one from the
+// queue. The enqueue carries the prompt body; the remove is a bare ack.
+//
+// Enqueues whose content is a <task-notification> blob are dropped — those
+// are internal TaskStop result re-injections, not user-typed prompts.
+func parseQueueOperation(raw RawMessage, timestamp time.Time) []StreamItem {
+	agentName := agentDisplayName(raw.AgentID)
+	switch raw.Operation {
+	case "enqueue":
+		if strings.HasPrefix(strings.TrimSpace(raw.QueueContent), "<task-notification>") {
+			return nil
+		}
+		return sessionEvent(raw, timestamp, agentName, "queued", raw.QueueContent)
+	case "remove":
+		return sessionEvent(raw, timestamp, agentName, "dequeued", "")
 	}
 	return nil
 }
@@ -532,6 +648,26 @@ func parseAssistantMessage(raw RawMessage, timestamp time.Time) []StreamItem {
 	}
 	if len(items) > 0 && msg.Model != "" && msg.Model != "<synthetic>" {
 		items[0].Model = msg.Model
+	}
+
+	// Emit a cache-miss marker when the assistant message reports one. This
+	// explains why per-agent context% can spike — e.g. ToolSearch loading a
+	// new tool busts the prompt cache, forcing tens of thousands of input
+	// tokens to be re-sent.
+	if msg.Diagnostics != nil && msg.Diagnostics.CacheMissReason != nil {
+		r := msg.Diagnostics.CacheMissReason
+		detail := r.Type
+		if r.CacheMissedInputTokens > 0 {
+			detail = fmt.Sprintf("%s, +%s tokens", r.Type, formatTokenCount(r.CacheMissedInputTokens))
+		}
+		items = append(items, StreamItem{
+			Type:      TypeCacheMiss,
+			SessionID: raw.SessionID,
+			AgentID:   raw.AgentID,
+			AgentName: agentName,
+			Timestamp: timestamp,
+			Content:   detail,
+		})
 	}
 
 	return items

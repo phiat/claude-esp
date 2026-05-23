@@ -244,6 +244,24 @@ func (s *StreamView) renderItem(item parser.StreamItem, width int) string {
 	if item.Type == parser.TypePRLink {
 		return mutedStyle.Render(fmt.Sprintf("── %s ──", item.Content))
 	}
+	if item.Type == parser.TypeCacheMiss {
+		text := "── cache miss ──"
+		if item.Content != "" {
+			text = fmt.Sprintf("── cache miss: %s ──", item.Content)
+		}
+		return mutedStyle.Render(text)
+	}
+	if item.Type == parser.TypeSessionEvent {
+		label := item.ToolName
+		if label == "" {
+			label = "event"
+		}
+		text := fmt.Sprintf("── %s ──", label)
+		if item.Content != "" {
+			text = fmt.Sprintf("── %s: %s ──", label, oneLineSnippet(item.Content, 80))
+		}
+		return mutedStyle.Render(text)
+	}
 
 	var b strings.Builder
 
@@ -407,6 +425,19 @@ func formatDuration(ms int64) string {
 	}
 	mins := secs / 60.0
 	return fmt.Sprintf("(%.1fm)", mins)
+}
+
+// oneLineSnippet collapses whitespace into single spaces and truncates to
+// `max` runes with a trailing "…" if needed. Used by single-line markers
+// where the source content may contain newlines or be much longer than the
+// marker line should be.
+func oneLineSnippet(s string, max int) string {
+	flat := strings.Join(strings.Fields(s), " ")
+	if utf8.RuneCountInString(flat) <= max {
+		return flat
+	}
+	runes := []rune(flat)
+	return string(runes[:max]) + "…"
 }
 
 // View renders the stream
