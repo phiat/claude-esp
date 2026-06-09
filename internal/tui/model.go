@@ -626,7 +626,7 @@ func (m *Model) renderStreamOnly() string {
 func (m *Model) renderHelp() string {
 	var help string
 	if m.focus == FocusTree {
-		help = "j/k: navigate │ space: toggle │ s: solo │ A: auto-discover │ q: quit"
+		help = "j/k: navigate │ space: toggle │ s: solo │ d: remove │ A: auto-discover │ q: quit"
 	} else {
 		help = "j/k: scroll │ g/G: top/bottom │ A: auto-discover │ tab: tree │ q: quit"
 	}
