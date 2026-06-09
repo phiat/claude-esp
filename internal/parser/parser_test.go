@@ -897,3 +897,112 @@ func TestParseLine_SkillListing_UpdateSurfaces(t *testing.T) {
 		t.Errorf("content = %q, want %q", items[0].Content, "50 total")
 	}
 }
+
+func TestParseLine_SessionTitleAITitle(t *testing.T) {
+	// Claude Code renamed agent-name → ai-title; the new lines carry the
+	// label in aiTitle and have no timestamp field.
+	line := `{"type":"ai-title","aiTitle":"Understand pat search functionality","sessionId":"sess-3"}`
+	items, err := ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 title item, got %d", len(items))
+	}
+	if items[0].Type != TypeSessionTitle {
+		t.Errorf("type = %q, want %q", items[0].Type, TypeSessionTitle)
+	}
+	if items[0].Content != "Understand pat search functionality" {
+		t.Errorf("content = %q", items[0].Content)
+	}
+	if items[0].SessionID != "sess-3" {
+		t.Errorf("sessionID = %q, want sess-3", items[0].SessionID)
+	}
+}
+
+func TestParseLine_AITitleEmptyDropped(t *testing.T) {
+	line := `{"type":"ai-title","aiTitle":"","sessionId":"sess-3"}`
+	items, _ := ParseLine(line)
+	if len(items) != 0 {
+		t.Fatalf("expected 0 items for empty ai-title, got %+v", items)
+	}
+}
+
+func TestParseLine_PermissionMode(t *testing.T) {
+	line := `{"type":"permission-mode","permissionMode":"auto","sessionId":"s"}`
+	items, err := ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 || items[0].Type != TypeSessionEvent {
+		t.Fatalf("expected 1 session event, got %+v", items)
+	}
+	if items[0].ToolName != "permission mode" || items[0].Content != "auto" {
+		t.Errorf("got label=%q detail=%q, want permission mode/auto", items[0].ToolName, items[0].Content)
+	}
+}
+
+func TestParseLine_APIError(t *testing.T) {
+	line := `{"type":"system","subtype":"api_error","sessionId":"s","timestamp":"2026-06-01T12:00:00Z","error":{"message":"529 overloaded_error","status":529,"formatted":"529 Overloaded"},"retryInMs":559.6,"retryAttempt":1,"maxRetries":10}`
+	items, err := ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 || items[0].Type != TypeAPIError {
+		t.Fatalf("expected 1 api_error item, got %+v", items)
+	}
+	if items[0].Content != "529 Overloaded, retry 1/10" {
+		t.Errorf("content = %q, want %q", items[0].Content, "529 Overloaded, retry 1/10")
+	}
+}
+
+func TestParseLine_APIError_MessageFallback(t *testing.T) {
+	line := `{"type":"system","subtype":"api_error","sessionId":"s","timestamp":"2026-06-01T12:00:00Z","error":{"message":"connection reset"}}`
+	items, _ := ParseLine(line)
+	if len(items) != 1 || items[0].Content != "connection reset" {
+		t.Fatalf("expected message fallback, got %+v", items)
+	}
+}
+
+func TestParseLine_AwaySummary(t *testing.T) {
+	line := `{"type":"system","subtype":"away_summary","sessionId":"s","timestamp":"2026-06-01T12:00:00Z","content":"Built the thing. Next: ship it."}`
+	items, err := ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 || items[0].Type != TypeSessionEvent {
+		t.Fatalf("expected 1 session event, got %+v", items)
+	}
+	if items[0].ToolName != "recap" || items[0].Content != "Built the thing. Next: ship it." {
+		t.Errorf("got label=%q detail=%q", items[0].ToolName, items[0].Content)
+	}
+}
+
+func TestParseLine_AwaySummary_EmptyDropped(t *testing.T) {
+	line := `{"type":"system","subtype":"away_summary","sessionId":"s","timestamp":"2026-06-01T12:00:00Z"}`
+	items, _ := ParseLine(line)
+	if len(items) != 0 {
+		t.Fatalf("expected 0 items, got %+v", items)
+	}
+}
+
+func TestContextWindowFor(t *testing.T) {
+	tests := []struct {
+		model string
+		want  int64
+	}{
+		{"claude-fable-5", 1_000_000},
+		{"claude-opus-4-8", 1_000_000},
+		{"claude-opus-4-7", 1_000_000},
+		{"claude-opus-4-6", 1_000_000},
+		{"claude-sonnet-4-6", 1_000_000},
+		{"claude-haiku-4-5-20251001", 200_000},
+		{"claude-sonnet-4-5", 200_000},
+		{"some-unknown-model", 200_000},
+	}
+	for _, tt := range tests {
+		if got := ContextWindowFor(tt.model); got != tt.want {
+			t.Errorf("ContextWindowFor(%q) = %d, want %d", tt.model, got, tt.want)
+		}
+	}
+}

@@ -25,7 +25,7 @@ import (
 )
 
 var (
-	version = "0.8.0"
+	version = "0.9.0"
 )
 
 func main() {
@@ -169,7 +169,8 @@ KEYBINDINGS:
     a           Toggle auto-scroll
     h           Hide/show tree pane
     A           Toggle auto-discovery of new sessions
-    x/d         Remove selected session (in tree)
+    x           Toggle text (response) visibility
+    d           Remove selected session (in tree)
     tab         Switch focus between tree and stream
     j/k         Navigate (tree) or scroll (stream)
     space       On agent: toggle visibility · On session: collapse/expand (pins on manual expand)

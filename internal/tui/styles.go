@@ -122,6 +122,10 @@ var (
 	// Muted text style (for truncation messages etc)
 	mutedStyle = lipgloss.NewStyle().
 			Foreground(mutedColor)
+
+	// API error marker - red, so failed/retrying requests stand out
+	apiErrorStyle = lipgloss.NewStyle().
+			Foreground(errorColor)
 )
 
 // Helper to truncate strings

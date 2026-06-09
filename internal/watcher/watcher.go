@@ -166,7 +166,8 @@ type Watcher struct {
 	claudeDir         string
 	pollInterval      time.Duration
 	sessions          map[string]*Session
-	sessionsMu        sync.RWMutex     // protects sessions map
+	removed           map[string]bool  // session IDs removed by the user; never re-discovered
+	sessionsMu        sync.RWMutex     // protects sessions and removed maps
 	filePositions     map[string]int64 // track read position per file
 	filePosMu         sync.RWMutex     // protects filePositions map
 	Items             chan parser.StreamItem
@@ -213,6 +214,7 @@ func New(sessionID string, pollInterval time.Duration, activeWindow time.Duratio
 		claudeDir:         claudeDir,
 		pollInterval:      pollInterval,
 		sessions:          make(map[string]*Session),
+		removed:           make(map[string]bool),
 		filePositions:     make(map[string]int64),
 		Items:             make(chan parser.StreamItem, ItemChannelBuffer),
 		Errors:            make(chan error, ErrorChannelBuffer),
@@ -390,9 +392,16 @@ func (w *Watcher) discoverActiveSessions() error {
 		discovered = discovered[:w.maxSessions]
 	}
 
+	// Hold the lock: this also runs from the fsnotify goroutine (via
+	// handleFsCreate) after Start, concurrently with readers.
+	w.sessionsMu.Lock()
 	for _, d := range discovered {
+		if w.removed[d.session.ID] {
+			continue
+		}
 		w.sessions[d.session.ID] = d.session
 	}
+	w.sessionsMu.Unlock()
 
 	return err
 }
@@ -402,10 +411,12 @@ func (w *Watcher) SetSkipHistory(skip bool) {
 	w.skipHistory.Store(skip)
 }
 
-// RemoveSession removes a session from being watched
+// RemoveSession removes a session from being watched and marks it so
+// auto-discovery (polling or fsnotify) doesn't immediately re-add it.
 func (w *Watcher) RemoveSession(sessionID string) {
 	w.sessionsMu.Lock()
 	delete(w.sessions, sessionID)
+	w.removed[sessionID] = true
 	w.sessionsMu.Unlock()
 }
 
@@ -1018,7 +1029,7 @@ func (w *Watcher) handleNewSessionFile(path string) {
 	}
 
 	w.sessionsMu.Lock()
-	if _, exists := w.sessions[session.ID]; exists {
+	if _, exists := w.sessions[session.ID]; exists || w.removed[session.ID] {
 		w.sessionsMu.Unlock()
 		return
 	}
@@ -1209,9 +1220,10 @@ func (w *Watcher) checkForNewSessions() {
 
 		w.sessionsMu.RLock()
 		_, exists := w.sessions[id]
+		removed := w.removed[id]
 		w.sessionsMu.RUnlock()
 
-		if exists {
+		if exists || removed {
 			return nil
 		}
 
@@ -1358,21 +1370,27 @@ func (w *Watcher) skipToEndOfFiles(session *Session) {
 
 // findPositionForLastNLines returns the byte offset to start reading the last N lines
 func findPositionForLastNLines(path string, n int) int64 {
+	if n <= 0 {
+		return 0
+	}
 	file, err := os.Open(path)
 	if err != nil {
 		return 0
 	}
 	defer file.Close()
 
-	// Collect positions of all newlines
-	var newlinePositions []int64
+	// Track only the last n newline positions in a ring buffer — keeps
+	// memory O(n) instead of one offset per line in the whole file.
+	ring := make([]int64, n)
+	var count int64
 	var pos int64
 	buf := make([]byte, FileReadBufferSize)
 	for {
 		bytesRead, err := file.Read(buf)
 		for i := 0; i < bytesRead; i++ {
 			if buf[i] == '\n' {
-				newlinePositions = append(newlinePositions, pos+int64(i)+1)
+				ring[count%int64(n)] = pos + int64(i) + 1
+				count++
 			}
 		}
 		pos += int64(bytesRead)
@@ -1382,12 +1400,13 @@ func findPositionForLastNLines(path string, n int) int64 {
 	}
 
 	// If fewer than N lines, start from beginning
-	if len(newlinePositions) <= n {
+	if count <= int64(n) {
 		return 0
 	}
 
-	// Return position after the newline that's N lines from the end
-	return newlinePositions[len(newlinePositions)-n]
+	// Return position after the newline that's N lines from the end:
+	// the oldest entry still in the ring.
+	return ring[count%int64(n)]
 }
 
 func (w *Watcher) readSessionFiles(session *Session) {

@@ -23,7 +23,8 @@ const (
 	TypeDebug         StreamItemType = "debug"          // raw line type/subtype (only emitted when DebugAll is on)
 	TypeSessionTitle  StreamItemType = "session_title"  // session label update (agent-name / custom-title)
 	TypeCacheMiss     StreamItemType = "cache_miss"     // prompt-cache invalidation (assistant.diagnostics.cache_miss_reason)
-	TypeSessionEvent  StreamItemType = "session_event"  // misc session-state change (queue-op, plan/auto mode, tool/MCP/skill deltas, permission mode)
+	TypeSessionEvent  StreamItemType = "session_event"  // misc session-state change (queue-op, plan/auto mode, tool/MCP/skill deltas, permission mode, away recap)
+	TypeAPIError      StreamItemType = "api_error"      // API request failure + retry progress (system.api_error)
 
 	// AgentIDDisplayLength is how many chars of agent ID to show in display name
 	AgentIDDisplayLength = 7
@@ -76,10 +77,16 @@ type RawMessage struct {
 	MessageCount  int             `json:"messageCount,omitempty"`
 	Message       json.RawMessage `json:"message"`
 	ToolUseResult json.RawMessage `json:"toolUseResult,omitempty"`
-	// AgentTitle and CustomTitle carry session-level labels on type="agent-name"
-	// and type="custom-title" lines respectively.
+	// AgentTitle, CustomTitle and AITitle carry session-level labels on
+	// type="agent-name", type="custom-title" and type="ai-title" lines
+	// respectively. agent-name is the legacy spelling; Claude Code now emits
+	// ai-title (which has no timestamp field).
 	AgentTitle  string `json:"agentName,omitempty"`
 	CustomTitle string `json:"customTitle,omitempty"`
+	AITitle     string `json:"aiTitle,omitempty"`
+	// PermissionMode carries the mode on type="permission-mode" lines
+	// ("default", "auto", ...).
+	PermissionMode string `json:"permissionMode,omitempty"`
 	// CompactMetadata carries trigger + preTokens on system.compact_boundary lines.
 	CompactMetadata *CompactMetadata `json:"compactMetadata,omitempty"`
 	// Attachment carries hook output / diagnostics / etc on type="attachment" lines.
@@ -89,9 +96,21 @@ type RawMessage struct {
 	PRURL        string `json:"prUrl,omitempty"`
 	PRRepository string `json:"prRepository,omitempty"`
 	// Queue-operation fields (type="queue-operation"): "enqueue" or "remove",
-	// with the queued prompt body in Content.
-	Operation    string `json:"operation,omitempty"`
-	QueueContent string `json:"content,omitempty"`
+	// with the queued prompt body in Content. Content also carries the recap
+	// text on system.away_summary lines.
+	Operation string `json:"operation,omitempty"`
+	Content   string `json:"content,omitempty"`
+	// API-error fields (system.api_error).
+	APIError     *APIErrorDetail `json:"error,omitempty"`
+	RetryAttempt int             `json:"retryAttempt,omitempty"`
+	MaxRetries   int             `json:"maxRetries,omitempty"`
+}
+
+// APIErrorDetail is the error payload on system.api_error lines.
+type APIErrorDetail struct {
+	Formatted string `json:"formatted,omitempty"` // e.g. "529 Overloaded"
+	Status    int    `json:"status,omitempty"`
+	Message   string `json:"message,omitempty"`
 }
 
 // CompactMetadata describes a conversation-compaction event.
@@ -257,6 +276,12 @@ func ParseLine(line string) ([]StreamItem, error) {
 		items = parseSessionTitle(raw, timestamp, raw.AgentTitle)
 	case "custom-title":
 		items = parseSessionTitle(raw, timestamp, raw.CustomTitle)
+	case "ai-title":
+		items = parseSessionTitle(raw, timestamp, raw.AITitle)
+	case "permission-mode":
+		if raw.PermissionMode != "" {
+			items = sessionEvent(raw, timestamp, agentDisplayName(raw.AgentID), "permission mode", raw.PermissionMode)
+		}
 	case "attachment":
 		items = parseAttachment(raw, timestamp)
 		if DebugAll && len(items) == 0 {
@@ -396,6 +421,8 @@ func nameDeltaDetail(a *Attachment) string {
 // parseQueueOperation surfaces top-level type="queue-operation" lines, which
 // CC emits when the user enqueues a follow-up prompt or removes one from the
 // queue. The enqueue carries the prompt body; the remove is a bare ack.
+// (attachment.queued_command duplicates this pair — same prompt, emitted at
+// delivery time — so it is intentionally left to the DebugAll path.)
 //
 // Enqueues whose content is a <task-notification> blob are dropped — those
 // are internal TaskStop result re-injections, not user-typed prompts.
@@ -403,10 +430,10 @@ func parseQueueOperation(raw RawMessage, timestamp time.Time) []StreamItem {
 	agentName := agentDisplayName(raw.AgentID)
 	switch raw.Operation {
 	case "enqueue":
-		if strings.HasPrefix(strings.TrimSpace(raw.QueueContent), "<task-notification>") {
+		if strings.HasPrefix(strings.TrimSpace(raw.Content), "<task-notification>") {
 			return nil
 		}
-		return sessionEvent(raw, timestamp, agentName, "queued", raw.QueueContent)
+		return sessionEvent(raw, timestamp, agentName, "queued", raw.Content)
 	case "remove":
 		return sessionEvent(raw, timestamp, agentName, "dequeued", "")
 	}
@@ -517,12 +544,28 @@ func parseSessionTitle(raw RawMessage, timestamp time.Time, title string) []Stre
 // parseSystemMessage handles system-type JSONL lines. Surfaces:
 //   - subtype=turn_duration → TypeTurnMarker (turn ended + duration)
 //   - subtype=compact_boundary → TypeCompactMarker (auto/manual compaction with preTokens)
+//   - subtype=api_error → TypeAPIError (failed API request + retry progress)
+//   - subtype=away_summary → TypeSessionEvent (while-you-were-away recap)
 //
 // Other subtypes are intentionally dropped.
 func parseSystemMessage(raw RawMessage, timestamp time.Time) []StreamItem {
 	agentName := agentDisplayName(raw.AgentID)
 
 	switch raw.Subtype {
+	case "api_error":
+		return []StreamItem{{
+			Type:      TypeAPIError,
+			SessionID: raw.SessionID,
+			AgentID:   raw.AgentID,
+			AgentName: agentName,
+			Timestamp: timestamp,
+			Content:   formatAPIError(raw),
+		}}
+	case "away_summary":
+		if raw.Content != "" {
+			return sessionEvent(raw, timestamp, agentName, "recap", raw.Content)
+		}
+		return nil
 	case "turn_duration":
 		return []StreamItem{{
 			Type:       TypeTurnMarker,
@@ -544,6 +587,27 @@ func parseSystemMessage(raw RawMessage, timestamp time.Time) []StreamItem {
 		}}
 	}
 	return nil
+}
+
+// formatAPIError renders a system.api_error line into a short label like
+// "529 Overloaded, retry 1/10". Falls back to the raw error message (or a
+// bare status code) when the pre-formatted summary is absent.
+func formatAPIError(raw RawMessage) string {
+	var parts []string
+	if e := raw.APIError; e != nil {
+		switch {
+		case e.Formatted != "":
+			parts = append(parts, e.Formatted)
+		case e.Message != "":
+			parts = append(parts, e.Message)
+		case e.Status != 0:
+			parts = append(parts, fmt.Sprintf("status %d", e.Status))
+		}
+	}
+	if raw.RetryAttempt > 0 && raw.MaxRetries > 0 {
+		parts = append(parts, fmt.Sprintf("retry %d/%d", raw.RetryAttempt, raw.MaxRetries))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // formatCompactSummary renders compaction metadata into a short label like
@@ -582,11 +646,13 @@ func formatTokenCount(n int64) string {
 // releases of the same family resolve correctly.
 func ContextWindowFor(model string) int64 {
 	switch {
-	case strings.HasPrefix(model, "claude-opus-4-7"),
+	case strings.HasPrefix(model, "claude-fable-5"),
+		strings.HasPrefix(model, "claude-opus-4-8"),
+		strings.HasPrefix(model, "claude-opus-4-7"),
+		strings.HasPrefix(model, "claude-opus-4-6"),
 		strings.HasPrefix(model, "claude-sonnet-4-6"):
 		return 1_000_000
 	case strings.HasPrefix(model, "claude-haiku-4-5"),
-		strings.HasPrefix(model, "claude-opus-4-6"),
 		strings.HasPrefix(model, "claude-sonnet-4-5"),
 		strings.HasPrefix(model, "claude-haiku-4"):
 		return 200_000

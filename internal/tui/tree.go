@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mattn/go-runewidth"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // NodeType indicates the type of tree node
@@ -776,10 +776,11 @@ func (t *TreeView) View() string {
 			if lineLen < innerWidth {
 				line += strings.Repeat(" ", innerWidth-lineLen)
 			} else if lineLen > innerWidth {
-				// Truncate over-wide lines rune-by-rune so we stop at
-				// exactly innerWidth visible columns. Preserves ANSI
-				// escape sequences that precede the visible runes.
-				line = runewidth.Truncate(stripAnsi(line), innerWidth, "…")
+				// ansi.Truncate is escape-aware: it cuts at exactly
+				// innerWidth visible columns while keeping the line's
+				// styling intact (the old stripAnsi+runewidth.Truncate
+				// dropped all color from truncated lines).
+				line = ansi.Truncate(line, innerWidth, "…")
 			}
 		}
 
@@ -847,32 +848,13 @@ func contextSuffix(node *TreeNode) string {
 	return fmt.Sprintf("%d%%", pct)
 }
 
-// lipglossWidth calculates visible width accounting for ANSI codes
+// lipglossWidth calculates visible width accounting for ANSI codes.
+// ansi.StringWidth handles CSI/OSC escape sequences (the previous hand-rolled
+// stripper missed OSC) and East Asian wide characters / emoji, which occupy
+// 2 terminal columns despite being 1 rune. len([]rune(s)) would undercount
+// lines with 💤/📁/💬/🤖/✓/⏳ icons, causing them to be padded too short and
+// then wrap in the terminal — which made the tree taller than its assigned
+// height and overflowed the viewport, clipping the top of the TUI.
 func lipglossWidth(s string) int {
-	// runewidth.StringWidth correctly handles East Asian wide characters
-	// and emoji (which occupy 2 terminal columns despite being 1 rune).
-	// len([]rune(s)) would undercount lines with 💤/📁/💬/🤖/✓/⏳ icons,
-	// causing them to be padded too short and then wrap in the terminal —
-	// which made the tree taller than its assigned height and overflowed
-	// the viewport, clipping the top of the TUI.
-	return runewidth.StringWidth(stripAnsi(s))
-}
-
-func stripAnsi(s string) string {
-	var result strings.Builder
-	inEscape := false
-	for _, r := range s {
-		if r == '\x1b' {
-			inEscape = true
-			continue
-		}
-		if inEscape {
-			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
-				inEscape = false
-			}
-			continue
-		}
-		result.WriteRune(r)
-	}
-	return result.String()
+	return ansi.StringWidth(s)
 }

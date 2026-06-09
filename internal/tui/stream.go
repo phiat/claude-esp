@@ -21,7 +21,8 @@ const (
 type StreamView struct {
 	viewport    viewport.Model
 	items       []parser.StreamItem
-	seenToolIDs map[string]bool // dedupe tool input/output by ToolID
+	seenToolIDs map[string]bool   // dedupe tool input/output by ToolID
+	toolNames   map[string]string // ToolID → tool name, for labeling outputs in O(1)
 	width       int
 	height      int
 	autoScroll  bool
@@ -44,6 +45,7 @@ func NewStreamView() *StreamView {
 		viewport:       vp,
 		items:          make([]parser.StreamItem, 0),
 		seenToolIDs:    make(map[string]bool),
+		toolNames:      make(map[string]string),
 		autoScroll:     true,
 		maxLines:       MaxLinesPerItem,
 		showThinking:   true,
@@ -92,14 +94,35 @@ func (s *StreamView) AddItem(item parser.StreamItem) {
 			return // Skip duplicate
 		}
 		s.seenToolIDs[dedupKey] = true
+		if item.Type == parser.TypeToolInput && item.ToolName != "" {
+			s.toolNames[item.ToolID] = item.ToolName
+		}
 	}
 
 	s.items = append(s.items, item)
 	// Keep last MaxStreamItems items to prevent memory issues
 	if len(s.items) > MaxStreamItems {
 		s.items = s.items[len(s.items)-MaxStreamItems:]
+		s.rebuildToolIndexes()
 	}
 	s.updateContent()
+}
+
+// rebuildToolIndexes recreates seenToolIDs and toolNames from the surviving
+// items after truncation. Without this both maps grow without bound in
+// long-running sessions: entries for evicted items are never released.
+func (s *StreamView) rebuildToolIndexes() {
+	s.seenToolIDs = make(map[string]bool, len(s.items))
+	s.toolNames = make(map[string]string, len(s.items))
+	for _, it := range s.items {
+		if it.ToolID == "" {
+			continue
+		}
+		s.seenToolIDs[fmt.Sprintf("%s:%s", it.ToolID, it.Type)] = true
+		if it.Type == parser.TypeToolInput && it.ToolName != "" {
+			s.toolNames[it.ToolID] = it.ToolName
+		}
+	}
 }
 
 // SetEnabledFilters updates which session/agent combos are visible
@@ -251,6 +274,13 @@ func (s *StreamView) renderItem(item parser.StreamItem, width int) string {
 		}
 		return mutedStyle.Render(text)
 	}
+	if item.Type == parser.TypeAPIError {
+		text := "── API error ──"
+		if item.Content != "" {
+			text = fmt.Sprintf("── API error: %s ──", oneLineSnippet(item.Content, 80))
+		}
+		return apiErrorStyle.Render(text)
+	}
 	if item.Type == parser.TypeSessionEvent {
 		label := item.ToolName
 		if label == "" {
@@ -289,16 +319,8 @@ func (s *StreamView) renderItem(item parser.StreamItem, width int) string {
 		b.WriteString(toolInputContentStyle.Render(content))
 
 	case parser.TypeToolOutput:
-		// Look up tool name from matching ToolInput
-		toolName := ""
-		if item.ToolID != "" {
-			for _, other := range s.items {
-				if other.Type == parser.TypeToolInput && other.ToolID == item.ToolID {
-					toolName = other.ToolName
-					break
-				}
-			}
-		}
+		// Look up tool name from the matching ToolInput's index entry
+		toolName := s.toolNames[item.ToolID]
 		var outputLabel string
 		if toolName != "" {
 			outputLabel = toolOutputIcon + " " + toolName + " result"
