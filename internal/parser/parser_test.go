@@ -986,12 +986,94 @@ func TestParseLine_AwaySummary_EmptyDropped(t *testing.T) {
 	}
 }
 
+func TestParseLine_LocalCommand(t *testing.T) {
+	line := `{"type":"system","subtype":"local_command","sessionId":"s","timestamp":"2026-07-18T17:03:31Z","content":"<command-name>/skills</command-name>\n            <command-message>skills</command-message>\n            <command-args></command-args>"}`
+	items, err := ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 || items[0].Type != TypeSessionEvent {
+		t.Fatalf("expected 1 session event, got %+v", items)
+	}
+	if items[0].ToolName != "command" || items[0].Content != "/skills" {
+		t.Errorf("got label=%q detail=%q", items[0].ToolName, items[0].Content)
+	}
+}
+
+func TestParseLine_LocalCommand_WithArgs(t *testing.T) {
+	line := `{"type":"system","subtype":"local_command","sessionId":"s","timestamp":"2026-07-18T17:03:31Z","content":"<command-name>/loop</command-name><command-args>5m check ci</command-args>"}`
+	items, _ := ParseLine(line)
+	if len(items) != 1 || items[0].Content != "/loop 5m check ci" {
+		t.Fatalf("got %+v", items)
+	}
+}
+
+func TestParseLine_LocalCommand_NoNameDropped(t *testing.T) {
+	line := `{"type":"system","subtype":"local_command","sessionId":"s","timestamp":"2026-07-18T17:03:31Z","content":"no tags here"}`
+	items, _ := ParseLine(line)
+	if len(items) != 0 {
+		t.Fatalf("expected 0 items, got %+v", items)
+	}
+}
+
+func TestParseLine_Informational(t *testing.T) {
+	tests := []struct {
+		level string
+		want  string
+	}{
+		{"warning", "warning"},
+		{"info", "note"},
+		{"", "note"},
+	}
+	for _, tt := range tests {
+		line := `{"type":"system","subtype":"informational","sessionId":"s","timestamp":"2026-08-03T13:34:23Z","content":"Backgrounding after the current tool finishes","level":"` + tt.level + `"}`
+		items, err := ParseLine(line)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(items) != 1 || items[0].Type != TypeSessionEvent {
+			t.Fatalf("level %q: expected 1 session event, got %+v", tt.level, items)
+		}
+		if items[0].ToolName != tt.want {
+			t.Errorf("level %q: got label=%q, want %q", tt.level, items[0].ToolName, tt.want)
+		}
+		if items[0].Content != "Backgrounding after the current tool finishes" {
+			t.Errorf("level %q: got detail=%q", tt.level, items[0].Content)
+		}
+	}
+}
+
+func TestParseLine_Informational_EmptyDropped(t *testing.T) {
+	line := `{"type":"system","subtype":"informational","sessionId":"s","timestamp":"2026-08-03T13:34:23Z","level":"warning"}`
+	items, _ := ParseLine(line)
+	if len(items) != 0 {
+		t.Fatalf("expected 0 items, got %+v", items)
+	}
+}
+
+func TestParseLine_AgentsKilled(t *testing.T) {
+	line := `{"type":"system","subtype":"agents_killed","sessionId":"s","timestamp":"2026-08-01T15:22:11Z"}`
+	items, err := ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 || items[0].Type != TypeSessionEvent {
+		t.Fatalf("expected 1 session event, got %+v", items)
+	}
+	if items[0].ToolName != "agents killed" {
+		t.Errorf("got label=%q", items[0].ToolName)
+	}
+}
+
 func TestContextWindowFor(t *testing.T) {
 	tests := []struct {
 		model string
 		want  int64
 	}{
 		{"claude-fable-5", 1_000_000},
+		{"claude-mythos-5", 1_000_000},
+		{"claude-opus-5", 1_000_000},
+		{"claude-sonnet-5", 1_000_000},
 		{"claude-opus-4-8", 1_000_000},
 		{"claude-opus-4-7", 1_000_000},
 		{"claude-opus-4-6", 1_000_000},

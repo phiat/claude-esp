@@ -100,6 +100,8 @@ type RawMessage struct {
 	// text on system.away_summary lines.
 	Operation string `json:"operation,omitempty"`
 	Content   string `json:"content,omitempty"`
+	// Level is the severity on system.informational lines ("info", "warning").
+	Level string `json:"level,omitempty"`
 	// API-error fields (system.api_error).
 	APIError     *APIErrorDetail `json:"error,omitempty"`
 	RetryAttempt int             `json:"retryAttempt,omitempty"`
@@ -546,6 +548,9 @@ func parseSessionTitle(raw RawMessage, timestamp time.Time, title string) []Stre
 //   - subtype=compact_boundary → TypeCompactMarker (auto/manual compaction with preTokens)
 //   - subtype=api_error → TypeAPIError (failed API request + retry progress)
 //   - subtype=away_summary → TypeSessionEvent (while-you-were-away recap)
+//   - subtype=local_command → TypeSessionEvent (slash command invoked)
+//   - subtype=informational → TypeSessionEvent (transient notice, e.g. backgrounding)
+//   - subtype=agents_killed → TypeSessionEvent (subagents terminated)
 //
 // Other subtypes are intentionally dropped.
 func parseSystemMessage(raw RawMessage, timestamp time.Time) []StreamItem {
@@ -585,8 +590,59 @@ func parseSystemMessage(raw RawMessage, timestamp time.Time) []StreamItem {
 			Timestamp: timestamp,
 			Content:   content,
 		}}
+	case "local_command":
+		if detail := localCommandDetail(raw.Content); detail != "" {
+			return sessionEvent(raw, timestamp, agentName, "command", detail)
+		}
+		return nil
+	case "informational":
+		if raw.Content != "" {
+			return sessionEvent(raw, timestamp, agentName, informationalLabel(raw.Level), raw.Content)
+		}
+		return nil
+	case "agents_killed":
+		return sessionEvent(raw, timestamp, agentName, "agents killed", "")
 	}
 	return nil
+}
+
+// localCommandDetail renders a system.local_command body into "/name args".
+// The body is an XML-ish blob: <command-name>/skills</command-name>
+// <command-message>…</command-message><command-args>…</command-args>.
+func localCommandDetail(content string) string {
+	name := xmlTagValue(content, "command-name")
+	if name == "" {
+		return ""
+	}
+	if args := xmlTagValue(content, "command-args"); args != "" {
+		return name + " " + args
+	}
+	return name
+}
+
+// informationalLabel maps a system.informational level to a stream label.
+// Unknown or absent levels read simply "note".
+func informationalLabel(level string) string {
+	if strings.EqualFold(level, "warning") {
+		return "warning"
+	}
+	return "note"
+}
+
+// xmlTagValue extracts the trimmed text between <tag> and </tag>. Returns ""
+// when the tag is absent or empty.
+func xmlTagValue(content, tag string) string {
+	open, close := "<"+tag+">", "</"+tag+">"
+	start := strings.Index(content, open)
+	if start < 0 {
+		return ""
+	}
+	start += len(open)
+	end := strings.Index(content[start:], close)
+	if end < 0 {
+		return ""
+	}
+	return strings.TrimSpace(content[start : start+end])
 }
 
 // formatAPIError renders a system.api_error line into a short label like
@@ -647,6 +703,9 @@ func formatTokenCount(n int64) string {
 func ContextWindowFor(model string) int64 {
 	switch {
 	case strings.HasPrefix(model, "claude-fable-5"),
+		strings.HasPrefix(model, "claude-mythos-5"),
+		strings.HasPrefix(model, "claude-opus-5"),
+		strings.HasPrefix(model, "claude-sonnet-5"),
 		strings.HasPrefix(model, "claude-opus-4-8"),
 		strings.HasPrefix(model, "claude-opus-4-7"),
 		strings.HasPrefix(model, "claude-opus-4-6"),

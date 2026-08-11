@@ -18,10 +18,10 @@ When using Claude Code interactively, tool outputs and thinking are collapsed by
 - **Hierarchical tree view** - Sessions with nested Main/Agent nodes
 - **Real-time streaming** - See thinking, tool calls, and outputs as they happen
 - **Subagent tracking** - Automatically discovers and displays subagent activity
-- **Session events** - Compaction boundaries, hook output, post-edit LSP diagnostics, PR-link events, prompt-cache misses (with reason + extra tokens), queue operations, plan/auto mode transitions, permission-mode changes, and skill/MCP/tool deltas surfaced inline
+- **Session events** - Compaction boundaries, hook output, post-edit LSP diagnostics, PR-link events, prompt-cache misses (with reason + extra tokens), queue operations, slash-command invocations, transient notices, killed-subagent markers, plan/auto mode transitions, permission-mode changes, and skill/MCP/tool deltas surfaced inline
 - **Agent type labels** - Shows agent types (Explore, code-reviewer, etc.) from `.meta.json`
 - **Token usage tracking** - Cumulative input/output token counts in the header bar
-- **Per-agent context size** - Each Main/subagent row shows current context as a percentage of the model's max context window (`Main 18%`, `Explore 9%`). Denominator is the model's *max window* (1M for opus-4-7 / sonnet-4-6, 200k for haiku-4-5), **not** the auto-compact threshold
+- **Per-agent context size** - Each Main/subagent row shows current context as a percentage of the model's max context window (`Main 18%`, `Explore 9%`). Denominator is the model's *max window* (1M for the Claude 5 family and opus-4-6 through 4-8 / sonnet-4-6, 200k for haiku-4-5), **not** the auto-compact threshold
 - **Tool execution duration** - Shows how long each tool call took
 - **Background task visibility** - See background tasks (⏳/✓) under spawning agent
 - **Filtering** - Toggle visibility of thinking, tools, outputs per session/agent
@@ -211,7 +211,7 @@ claude-esp/
 
 ## Development
 
-Built with [Bubbletea](https://github.com/charmbracelet/bubbletea) and [Lipgloss](https://github.com/charmbracelet/lipgloss). Issue tracking was done with [beads](https://github.com/steveyegge/beads).
+Built with [Bubbletea](https://github.com/charmbracelet/bubbletea) and [Lipgloss](https://github.com/charmbracelet/lipgloss).
 
 ```bash
 # Run tests
