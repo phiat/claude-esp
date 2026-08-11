@@ -23,6 +23,9 @@ Thumbs.db
 # Claude Code local settings
 .claude/
 
+# Local debug scratch
+.debug/
+
 # Beads issue tracking (local db)
 .beads/
 
