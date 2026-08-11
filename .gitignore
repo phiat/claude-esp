@@ -26,13 +26,5 @@ Thumbs.db
 # Local debug scratch
 .debug/
 
-# Beads issue tracking (local db)
-.beads/
-
 # Claude artifacts
 AGENTS.md
-
-# Beads / Dolt files (added by bd init)
-.dolt/
-*.db
-.beads-credential-key
