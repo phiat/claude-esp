@@ -2,9 +2,11 @@ package parser
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestParseLine_EmptyLine(t *testing.T) {
@@ -1085,6 +1087,36 @@ func TestContextWindowFor(t *testing.T) {
 	for _, tt := range tests {
 		if got := ContextWindowFor(tt.model); got != tt.want {
 			t.Errorf("ContextWindowFor(%q) = %d, want %d", tt.model, got, tt.want)
+		}
+	}
+}
+
+func TestDebugPreviewCJKNeverSplitsRune(t *testing.T) {
+	old := DebugAll
+	DebugAll = true
+	defer func() { DebugAll = old }()
+
+	// Claude Code writes non-ASCII to the transcript unescaped, so a
+	// multi-byte character can straddle the preview cut. Sweep the pad length
+	// so the boundary lands inside a rune from every offset.
+	for pad := 0; pad < 16; pad++ {
+		line := fmt.Sprintf(
+			`{"type":"file-history-snapshot","sessionId":"s","timestamp":"2025-01-01T12:00:00Z","note":"%s%s"}`,
+			strings.Repeat("x", pad),
+			strings.Repeat("測試中文", 30),
+		)
+		items, err := ParseLine(line)
+		if err != nil {
+			t.Fatalf("pad %d: %v", pad, err)
+		}
+		if len(items) != 1 {
+			t.Fatalf("pad %d: got %d items, want 1", pad, len(items))
+		}
+		if !utf8.ValidString(items[0].Content) {
+			t.Errorf("pad %d: preview is not valid UTF-8: %q", pad, items[0].Content)
+		}
+		if !strings.HasSuffix(items[0].Content, "…") {
+			t.Errorf("pad %d: want a trailing ellipsis, got %q", pad, items[0].Content)
 		}
 	}
 }

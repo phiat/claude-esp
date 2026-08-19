@@ -92,9 +92,7 @@ func (t *TreeView) AddSession(sessionID, projectPath string) *TreeNode {
 	if len(parts) > 2 {
 		displayName = parts[len(parts)-1]
 	}
-	if len(displayName) > 15 {
-		displayName = displayName[:15]
-	}
+	displayName = Truncate(displayName, 15)
 
 	session := &TreeNode{
 		Type:     NodeTypeSession,
@@ -210,9 +208,7 @@ func (t *TreeView) AddBackgroundTask(sessionID, parentAgentID, toolID, toolName,
 
 	// Truncate tool name for display
 	displayName := toolName
-	if len(displayName) > 25 {
-		displayName = displayName[:25] + "..."
-	}
+	displayName = Truncate(displayName, 25)
 
 	node := &TreeNode{
 		Type:          NodeTypeBackgroundTask,
@@ -473,10 +469,7 @@ func (t *TreeView) SetSessionTitle(sessionID, title string) {
 	}
 	for _, child := range t.Root.Children {
 		if child.Type == NodeTypeSession && child.ID == sessionID {
-			if len(title) > 25 {
-				title = title[:25]
-			}
-			child.Name = title
+			child.Name = Truncate(title, 25)
 			return
 		}
 	}

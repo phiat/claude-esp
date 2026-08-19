@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/mattn/go-runewidth"
 	"github.com/phiat/claude-esp/internal/parser"
 )
 
@@ -686,25 +687,48 @@ func extractToolNameFromLine(line string, toolID string) string {
 	return ""
 }
 
+// truncate shortens s to max terminal columns, adding "..." if it was cut.
+//
+// This mirrors tui.Truncate. It is duplicated rather than imported because
+// internal/tui already imports this package, so the reverse would be a cycle.
+func truncate(s string, max int) string {
+	if runewidth.StringWidth(s) <= max {
+		return s
+	}
+	ellipsis := max > 3
+	budget := max
+	if ellipsis {
+		budget = max - 3
+	}
+	var b strings.Builder
+	used := 0
+	for _, r := range s {
+		w := runewidth.RuneWidth(r)
+		if used+w > budget {
+			break
+		}
+		b.WriteRune(r)
+		used += w
+	}
+	if ellipsis {
+		b.WriteString("...")
+	}
+	return b.String()
+}
+
 // formatToolName creates a display name like "Bash: npm install"
 func formatToolName(toolName string, line string) string {
 	// For Bash, try to extract the command
 	if toolName == "Bash" {
 		if cmd := extractField(line, "command"); cmd != "" {
-			if len(cmd) > 30 {
-				cmd = cmd[:30] + "..."
-			}
-			return "Bash: " + cmd
+			return "Bash: " + truncate(cmd, 33)
 		}
 	}
 
 	// Task (legacy) and Agent (current name) both carry a "description" field
 	if toolName == "Task" || toolName == "Agent" {
 		if desc := extractField(line, "description"); desc != "" {
-			if len(desc) > 30 {
-				desc = desc[:30] + "..."
-			}
-			return toolName + ": " + desc
+			return toolName + ": " + truncate(desc, 33)
 		}
 	}
 

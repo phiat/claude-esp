@@ -535,7 +535,7 @@ func (m *Model) renderHeader() string {
 			sessionInfo = "Waiting..."
 		} else if len(sessions) == 1 {
 			for _, s := range sessions {
-				sessionInfo = fmt.Sprintf("Session: %s%s", truncate(s.ID, 12), autoDisc)
+				sessionInfo = fmt.Sprintf("Session: %s%s", Truncate(s.ID, 12), autoDisc)
 			}
 		} else {
 			sessionInfo = fmt.Sprintf("%d sessions%s", len(sessions), autoDisc)

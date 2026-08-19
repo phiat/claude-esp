@@ -19,13 +19,14 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/mattn/go-runewidth"
 	"github.com/phiat/claude-esp/internal/parser"
 	"github.com/phiat/claude-esp/internal/tui"
 	"github.com/phiat/claude-esp/internal/watcher"
 )
 
 var (
-	version = "0.10.0"
+	version = "0.11.0"
 )
 
 func main() {
@@ -127,14 +128,36 @@ func main() {
 	}
 }
 
+// truncatePath shortens s to max terminal columns, keeping the tail and
+// prefixing "..." if it was cut.
+//
+// Like tui.Truncate, this measures with go-runewidth and cuts on rune
+// boundaries. Project paths are ASCII today because Claude Code replaces
+// non-ASCII segments with "-" when it builds the transcript directory name,
+// but the byte slicing this replaces would emit invalid UTF-8 the moment a
+// non-ASCII path reached it.
 func truncatePath(s string, max int) string {
-	if len(s) <= max {
+	if runewidth.StringWidth(s) <= max {
 		return s
 	}
 	if max <= 3 {
-		return s[:max]
+		// Same head-cut behavior as before, without the byte slicing.
+		return tui.Truncate(s, max)
 	}
-	return "..." + s[len(s)-max+3:]
+	// Keep the tail -- the rightmost path segments carry the information.
+	budget := max - 3
+	runes := []rune(s)
+	used := 0
+	start := len(runes)
+	for i := len(runes) - 1; i >= 0; i-- {
+		w := runewidth.RuneWidth(runes[i])
+		if used+w > budget {
+			break
+		}
+		used += w
+		start = i
+	}
+	return "..." + string(runes[start:])
 }
 
 func printHelp() {

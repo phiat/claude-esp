@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // StreamItemType represents the type of content in a stream
@@ -316,7 +317,13 @@ func debugItem(raw RawMessage, line string, timestamp time.Time) StreamItem {
 	}
 	preview := line
 	if len(preview) > debugPreviewLen {
-		preview = preview[:debugPreviewLen] + "…"
+		// Back off to a rune boundary: the raw line is unescaped UTF-8, so a
+		// multi-byte character can straddle debugPreviewLen.
+		end := debugPreviewLen
+		for end > 0 && !utf8.RuneStart(preview[end]) {
+			end--
+		}
+		preview = preview[:end] + "…"
 	}
 	agentName := agentDisplayName(raw.AgentID)
 	return StreamItem{

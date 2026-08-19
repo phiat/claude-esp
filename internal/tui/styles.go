@@ -1,6 +1,11 @@
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
+)
 
 var (
 	// Colors
@@ -128,13 +133,34 @@ var (
 			Foreground(errorColor)
 )
 
-// Helper to truncate strings
-func truncate(s string, max int) string {
-	if len(s) <= max {
+// Truncate shortens s to max terminal columns, adding "..." if it was cut.
+//
+// Width is measured with go-runewidth -- the same basis the stream pane uses
+// for wrapping -- and cuts always land on a rune boundary, so multi-byte text
+// such as CJK session titles is never split mid-character. The byte slicing
+// this replaces both mis-measured such text as over-long and cut it into
+// invalid UTF-8.
+func Truncate(s string, max int) string {
+	if runewidth.StringWidth(s) <= max {
 		return s
 	}
-	if max <= 3 {
-		return s[:max]
+	ellipsis := max > 3
+	budget := max
+	if ellipsis {
+		budget = max - 3
 	}
-	return s[:max-3] + "..."
+	var b strings.Builder
+	used := 0
+	for _, r := range s {
+		w := runewidth.RuneWidth(r)
+		if used+w > budget {
+			break
+		}
+		b.WriteRune(r)
+		used += w
+	}
+	if ellipsis {
+		b.WriteString("...")
+	}
+	return b.String()
 }
