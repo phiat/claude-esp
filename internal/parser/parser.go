@@ -3,6 +3,8 @@ package parser
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -26,6 +28,7 @@ const (
 	TypeCacheMiss     StreamItemType = "cache_miss"     // prompt-cache invalidation (assistant.diagnostics.cache_miss_reason)
 	TypeSessionEvent  StreamItemType = "session_event"  // misc session-state change (queue-op, plan/auto mode, tool/MCP/skill deltas, permission mode, away recap)
 	TypeAPIError      StreamItemType = "api_error"      // API request failure + retry progress (system.api_error)
+	TypeArtifactLink  StreamItemType = "artifact_link"  // artifact published to claude.ai (type=frame-link)
 
 	// AgentIDDisplayLength is how many chars of agent ID to show in display name
 	AgentIDDisplayLength = 7
@@ -107,6 +110,27 @@ type RawMessage struct {
 	APIError     *APIErrorDetail `json:"error,omitempty"`
 	RetryAttempt int             `json:"retryAttempt,omitempty"`
 	MaxRetries   int             `json:"maxRetries,omitempty"`
+	// Artifact-link fields (type="frame-link"). Only the first line for an
+	// artifact carries the URL and title; follow-ups carry just ArtifactCount.
+	FrameURL      string `json:"frameUrl,omitempty"`
+	Title         string `json:"title,omitempty"`
+	ArtifactCount int    `json:"artifactCount,omitempty"`
+	// ContinuedInSessionID is the successor session on type="continued-in".
+	ContinuedInSessionID string `json:"continuedInSessionId,omitempty"`
+	// Cost-state fields (type="cost-state"), written at session end. The
+	// line has no timestamp; StartTime+TotalDuration (both ms) reconstructs it.
+	TotalCostUSD      float64               `json:"totalCostUSD,omitempty"`
+	TotalLinesAdded   int64                 `json:"totalLinesAdded,omitempty"`
+	TotalLinesRemoved int64                 `json:"totalLinesRemoved,omitempty"`
+	TotalDuration     int64                 `json:"totalDuration,omitempty"`
+	StartTime         int64                 `json:"startTime,omitempty"`
+	ModelUsage        map[string]ModelUsage `json:"modelUsage,omitempty"`
+}
+
+// ModelUsage is one model's entry in cost-state.modelUsage. Only the cost is
+// read; token counts are already tracked per assistant message.
+type ModelUsage struct {
+	CostUSD float64 `json:"costUSD,omitempty"`
 }
 
 // APIErrorDetail is the error payload on system.api_error lines.
@@ -147,6 +171,11 @@ type Attachment struct {
 	// skill_listing
 	SkillCount int  `json:"skillCount,omitempty"`
 	IsInitial  bool `json:"isInitial,omitempty"`
+	// task_status (background subagent progress)
+	TaskID       string `json:"taskId,omitempty"`
+	Description  string `json:"description,omitempty"`
+	Status       string `json:"status,omitempty"`
+	DeltaSummary string `json:"deltaSummary,omitempty"`
 }
 
 // DiagnosticFile is one file's worth of LSP diagnostics.
@@ -242,6 +271,22 @@ type ToolInput struct {
 	TaskID       string `json:"taskId,omitempty"`
 	TaskIDSnake  string `json:"task_id,omitempty"`
 	Cron         string `json:"cron,omitempty"`
+	// SendUserFile
+	Files   []string `json:"files,omitempty"`
+	Caption string   `json:"caption,omitempty"`
+	// AskUserQuestion
+	Questions []ToolInputQuestion `json:"questions,omitempty"`
+	// SendMessage
+	To      string `json:"to,omitempty"`
+	Message string `json:"message,omitempty"`
+	// Artifact
+	Action string `json:"action,omitempty"`
+	URL    string `json:"url,omitempty"`
+}
+
+// ToolInputQuestion is one entry in AskUserQuestion's questions array.
+type ToolInputQuestion struct {
+	Question string `json:"question"`
 }
 
 // ParseLine parses a single JSONL line and returns stream items
@@ -292,6 +337,17 @@ func ParseLine(line string) ([]StreamItem, error) {
 		}
 	case "pr-link":
 		items = parsePRLink(raw, timestamp)
+	case "frame-link":
+		items = parseFrameLink(raw, timestamp)
+		if DebugAll && len(items) == 0 {
+			items = []StreamItem{debugItem(raw, line, timestamp)}
+		}
+	case "continued-in":
+		if raw.ContinuedInSessionID != "" {
+			items = sessionEvent(raw, timestamp, agentDisplayName(raw.AgentID), "continued in", raw.ContinuedInSessionID)
+		}
+	case "cost-state":
+		items = parseCostState(raw, timestamp)
 	case "queue-operation":
 		items = parseQueueOperation(raw, timestamp)
 	default:
@@ -379,8 +435,33 @@ func parseAttachment(raw RawMessage, timestamp time.Time) []StreamItem {
 		if !raw.Attachment.IsInitial && raw.Attachment.SkillCount > 0 {
 			return sessionEvent(raw, timestamp, agentName, "skills", fmt.Sprintf("%d total", raw.Attachment.SkillCount))
 		}
+	case "task_status":
+		// Background subagent progress: "task running: <description> — <delta>".
+		if detail := taskStatusDetail(raw.Attachment); detail != "" {
+			label := "task"
+			if raw.Attachment.Status != "" {
+				label = "task " + raw.Attachment.Status
+			}
+			return sessionEvent(raw, timestamp, agentName, label, detail)
+		}
 	}
 	return nil
+}
+
+// taskStatusDetail joins a task_status attachment's description and delta
+// summary. Returns "" when both are empty (caller should drop the event).
+func taskStatusDetail(a *Attachment) string {
+	if a == nil {
+		return ""
+	}
+	switch {
+	case a.Description != "" && a.DeltaSummary != "":
+		return a.Description + " — " + a.DeltaSummary
+	case a.Description != "":
+		return a.Description
+	default:
+		return a.DeltaSummary
+	}
 }
 
 // sessionEvent builds a TypeSessionEvent marker. label goes in ToolName so
@@ -533,6 +614,83 @@ func parsePRLink(raw RawMessage, timestamp time.Time) []StreamItem {
 		Timestamp: timestamp,
 		Content:   content,
 	}}
+}
+
+// parseFrameLink surfaces type="frame-link" lines, written when the Artifact
+// tool publishes a page to claude.ai. The first line for an artifact carries
+// its title and URL; later lines (redeploys, watch bookkeeping) carry only an
+// artifact count and are dropped.
+func parseFrameLink(raw RawMessage, timestamp time.Time) []StreamItem {
+	if raw.FrameURL == "" {
+		return nil
+	}
+	content := "artifact → " + raw.FrameURL
+	if raw.Title != "" {
+		content = fmt.Sprintf("artifact %q → %s", raw.Title, raw.FrameURL)
+	}
+	return []StreamItem{{
+		Type:      TypeArtifactLink,
+		SessionID: raw.SessionID,
+		Timestamp: timestamp,
+		Content:   content,
+	}}
+}
+
+// parseCostState surfaces type="cost-state" lines as a session-cost marker:
+// "$13.75 · +1003/-168 lines · opus-5 sonnet-5 haiku-4-5". Claude Code
+// writes the line at session end without a timestamp, so the event time is
+// reconstructed from startTime + totalDuration when both are present.
+func parseCostState(raw RawMessage, fallback time.Time) []StreamItem {
+	if raw.TotalCostUSD == 0 && len(raw.ModelUsage) == 0 {
+		return nil
+	}
+	timestamp := fallback
+	if raw.StartTime > 0 && raw.TotalDuration > 0 {
+		timestamp = time.UnixMilli(raw.StartTime + raw.TotalDuration)
+	}
+	parts := []string{fmt.Sprintf("$%.2f", raw.TotalCostUSD)}
+	if raw.TotalLinesAdded > 0 || raw.TotalLinesRemoved > 0 {
+		parts = append(parts, fmt.Sprintf("+%d/-%d lines", raw.TotalLinesAdded, raw.TotalLinesRemoved))
+	}
+	if names := costStateModels(raw.ModelUsage); names != "" {
+		parts = append(parts, names)
+	}
+	return sessionEvent(raw, timestamp, agentDisplayName(raw.AgentID), "session cost", strings.Join(parts, " · "))
+}
+
+// costStateModels lists the models in a cost-state entry, most expensive
+// first, with the "claude-" prefix and any dated suffix stripped so the
+// marker stays short: "opus-5 sonnet-5 haiku-4-5".
+func costStateModels(usage map[string]ModelUsage) string {
+	if len(usage) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(usage))
+	for name := range usage {
+		names = append(names, name)
+	}
+	sort.SliceStable(names, func(i, j int) bool {
+		ci, cj := usage[names[i]].CostUSD, usage[names[j]].CostUSD
+		if ci != cj {
+			return ci > cj
+		}
+		return names[i] < names[j]
+	})
+	for i, name := range names {
+		names[i] = shortModelName(name)
+	}
+	return strings.Join(names, " ")
+}
+
+// shortModelName turns "claude-haiku-4-5-20251001" into "haiku-4-5".
+func shortModelName(model string) string {
+	name := strings.TrimPrefix(model, "claude-")
+	if i := strings.LastIndex(name, "-"); i > 0 && len(name)-i-1 == 8 {
+		if _, err := time.Parse("20060102", name[i+1:]); err == nil {
+			name = name[:i]
+		}
+	}
+	return name
 }
 
 // parseSessionTitle emits a TypeSessionTitle item carrying a human-readable
@@ -883,7 +1041,8 @@ func formatToolInput(toolName string, inputRaw json.RawMessage) string {
 	}
 
 	switch toolName {
-	case "Bash":
+	case "Bash", "Monitor":
+		// Monitor shares Bash's shape: a shell command plus a description.
 		if input.Description != "" {
 			return fmt.Sprintf("%s\n  # %s", input.Command, input.Description)
 		}
@@ -947,6 +1106,56 @@ func formatToolInput(toolName string, inputRaw json.RawMessage) string {
 			return fmt.Sprintf("%s: %s", input.Cron, input.Prompt)
 		}
 		return string(inputRaw)
+	case "SendUserFile":
+		names := make([]string, 0, len(input.Files))
+		for _, f := range input.Files {
+			names = append(names, filepath.Base(f))
+		}
+		files := strings.Join(names, ", ")
+		switch {
+		case files != "" && input.Caption != "":
+			return fmt.Sprintf("%s\n  # %s", files, input.Caption)
+		case files != "":
+			return files
+		case input.Caption != "":
+			return input.Caption
+		}
+		return string(inputRaw)
+	case "AskUserQuestion":
+		questions := make([]string, 0, len(input.Questions))
+		for _, q := range input.Questions {
+			if q.Question != "" {
+				questions = append(questions, q.Question)
+			}
+		}
+		if len(questions) > 0 {
+			return strings.Join(questions, "\n")
+		}
+		return string(inputRaw)
+	case "SendMessage":
+		if input.To != "" {
+			return fmt.Sprintf("→ %s: %s", input.To, input.Message)
+		}
+		if input.Message != "" {
+			return input.Message
+		}
+		return string(inputRaw)
+	case "ListAgents":
+		return "(list agents)"
+	case "Artifact":
+		action := input.Action
+		if action == "" {
+			action = "publish"
+		}
+		switch {
+		case input.FilePath != "" && input.URL != "":
+			return fmt.Sprintf("%s %s → %s", action, input.FilePath, input.URL)
+		case input.FilePath != "":
+			return fmt.Sprintf("%s %s", action, input.FilePath)
+		case input.URL != "":
+			return fmt.Sprintf("%s %s", action, input.URL)
+		}
+		return action
 	default:
 		return string(inputRaw)
 	}
