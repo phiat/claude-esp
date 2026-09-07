@@ -1120,3 +1120,214 @@ func TestDebugPreviewCJKNeverSplitsRune(t *testing.T) {
 		}
 	}
 }
+
+// --- v0.12.0: frame-link, continued-in, cost-state, task_status ---
+
+func TestParseLine_FrameLink(t *testing.T) {
+	line := `{"type":"frame-link","sessionId":"4f9aca60","path":"/tmp/scratch/marblemath.html","frameUrl":"https://claude.ai/code/artifact/d9254fd4-fadd-49af-a025-b168723f9530","title":"MarbleMath","artifactCount":1,"timestamp":"2026-08-23T21:59:11.397Z"}`
+	items, err := ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 || items[0].Type != TypeArtifactLink {
+		t.Fatalf("expected 1 artifact_link item, got %+v", items)
+	}
+	want := `artifact "MarbleMath" → https://claude.ai/code/artifact/d9254fd4-fadd-49af-a025-b168723f9530`
+	if items[0].Content != want {
+		t.Errorf("content = %q, want %q", items[0].Content, want)
+	}
+	if items[0].SessionID != "4f9aca60" {
+		t.Errorf("sessionID = %q", items[0].SessionID)
+	}
+}
+
+func TestParseLine_FrameLink_NoTitle(t *testing.T) {
+	line := `{"type":"frame-link","sessionId":"s","frameUrl":"https://claude.ai/code/artifact/abc","artifactCount":1,"timestamp":"2026-08-23T21:59:11.397Z"}`
+	items, _ := ParseLine(line)
+	if len(items) != 1 || items[0].Content != "artifact → https://claude.ai/code/artifact/abc" {
+		t.Fatalf("got %+v", items)
+	}
+}
+
+func TestParseLine_FrameLink_CountOnlyDropped(t *testing.T) {
+	// Redeploys and watch bookkeeping re-emit frame-link with only a count.
+	line := `{"type":"frame-link","artifactCount":1,"sessionId":"s","timestamp":"2026-08-23T22:06:10.001Z"}`
+	items, _ := ParseLine(line)
+	if len(items) != 0 {
+		t.Fatalf("expected 0 items, got %+v", items)
+	}
+}
+
+func TestParseLine_FrameLink_CountOnlyDebug(t *testing.T) {
+	prev := DebugAll
+	DebugAll = true
+	t.Cleanup(func() { DebugAll = prev })
+
+	line := `{"type":"frame-link","artifactCount":1,"sessionId":"s","timestamp":"2026-08-23T22:06:10.001Z"}`
+	items, _ := ParseLine(line)
+	if len(items) != 1 || items[0].Type != TypeDebug || items[0].ToolName != "frame-link" {
+		t.Fatalf("expected 1 debug item labelled frame-link, got %+v", items)
+	}
+}
+
+func TestParseLine_ContinuedIn(t *testing.T) {
+	line := `{"type":"continued-in","timestamp":"2026-09-04T21:38:04.469Z","sessionId":"d2bf19dc","continuedInSessionId":"6ee341a1-87cb-4157-a678-ceafb0bd48c6"}`
+	items, err := ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 || items[0].Type != TypeSessionEvent {
+		t.Fatalf("expected 1 session event, got %+v", items)
+	}
+	if items[0].ToolName != "continued in" || items[0].Content != "6ee341a1-87cb-4157-a678-ceafb0bd48c6" {
+		t.Errorf("got label=%q detail=%q", items[0].ToolName, items[0].Content)
+	}
+}
+
+func TestParseLine_ContinuedIn_EmptyDropped(t *testing.T) {
+	line := `{"type":"continued-in","timestamp":"2026-09-04T21:38:04.469Z","sessionId":"d2bf19dc"}`
+	items, _ := ParseLine(line)
+	if len(items) != 0 {
+		t.Fatalf("expected 0 items, got %+v", items)
+	}
+}
+
+func TestParseLine_CostState(t *testing.T) {
+	// Real shape: no timestamp field; startTime + totalDuration (ms) locate it.
+	line := `{"type":"cost-state","sessionId":"0e1f948f","totalCostUSD":13.749958700000004,"totalAPIDuration":1397557,"totalAPIDurationWithoutRetries":1397291,"totalToolDuration":850473,"totalLinesAdded":1003,"totalLinesRemoved":168,"totalDuration":58855298,"startTime":1788522122378,"modelUsage":{"claude-haiku-4-5-20251001":{"inputTokens":45592,"outputTokens":712,"costUSD":0.049152},"claude-sonnet-5":{"inputTokens":6294,"outputTokens":96305,"costUSD":1.2},"claude-opus-5":{"inputTokens":5499,"outputTokens":203056,"costUSD":12.5}},"hasUnknownModelCost":false}`
+	items, err := ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 || items[0].Type != TypeSessionEvent {
+		t.Fatalf("expected 1 session event, got %+v", items)
+	}
+	if items[0].ToolName != "session cost" {
+		t.Errorf("label = %q", items[0].ToolName)
+	}
+	want := "$13.75 · +1003/-168 lines · opus-5 sonnet-5 haiku-4-5"
+	if items[0].Content != want {
+		t.Errorf("detail = %q, want %q", items[0].Content, want)
+	}
+	wantTS := time.UnixMilli(1788522122378 + 58855298)
+	if !items[0].Timestamp.Equal(wantTS) {
+		t.Errorf("timestamp = %v, want %v", items[0].Timestamp, wantTS)
+	}
+}
+
+func TestParseLine_CostState_NoLines(t *testing.T) {
+	line := `{"type":"cost-state","sessionId":"s","totalCostUSD":1.2836649999999998,"totalLinesAdded":0,"totalLinesRemoved":0,"totalDuration":95160,"startTime":1788264806385,"modelUsage":{"claude-opus-5":{"costUSD":1.28}}}`
+	items, _ := ParseLine(line)
+	if len(items) != 1 || items[0].Content != "$1.28 · opus-5" {
+		t.Fatalf("got %+v", items)
+	}
+}
+
+func TestParseLine_CostState_EmptyDropped(t *testing.T) {
+	line := `{"type":"cost-state","sessionId":"s","totalCostUSD":0,"modelUsage":{}}`
+	items, _ := ParseLine(line)
+	if len(items) != 0 {
+		t.Fatalf("expected 0 items, got %+v", items)
+	}
+}
+
+func TestShortModelName(t *testing.T) {
+	tests := map[string]string{
+		"claude-haiku-4-5-20251001": "haiku-4-5",
+		"claude-opus-5":             "opus-5",
+		"claude-fable-5-1":          "fable-5-1",
+		"claude-sonnet-4-5":         "sonnet-4-5",
+		"gpt-4o":                    "gpt-4o",
+	}
+	for in, want := range tests {
+		if got := shortModelName(in); got != want {
+			t.Errorf("shortModelName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestParseLine_TaskStatus(t *testing.T) {
+	line := `{"type":"attachment","sessionId":"s","timestamp":"2026-08-30T10:00:00Z","attachment":{"type":"task_status","taskId":"a9c1d0bd1b5243cd3","taskType":"local_agent","description":"Brainstorm next steps for Towerstakes","status":"running","deltaSummary":"Comparing rush pacing in econ/rush.go","outputFilePath":"/tmp/x.output"}}`
+	items, err := ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 || items[0].Type != TypeSessionEvent {
+		t.Fatalf("expected 1 session event, got %+v", items)
+	}
+	if items[0].ToolName != "task running" {
+		t.Errorf("label = %q", items[0].ToolName)
+	}
+	want := "Brainstorm next steps for Towerstakes — Comparing rush pacing in econ/rush.go"
+	if items[0].Content != want {
+		t.Errorf("detail = %q, want %q", items[0].Content, want)
+	}
+}
+
+func TestParseLine_TaskStatus_EmptyDropped(t *testing.T) {
+	line := `{"type":"attachment","sessionId":"s","timestamp":"2026-08-30T10:00:00Z","attachment":{"type":"task_status","taskId":"x","status":"running"}}`
+	items, _ := ParseLine(line)
+	if len(items) != 0 {
+		t.Fatalf("expected 0 items, got %+v", items)
+	}
+}
+
+// TestParseLine_NewNoiseTypesDropped pins the deliberate-drop list for line
+// types introduced in Claude Code 2.1.235–2.1.261. These are high-volume
+// bookkeeping (atis-latch alone is ~2k lines per 90 sessions) and must stay
+// out of the stream without DebugAll.
+func TestParseLine_NewNoiseTypesDropped(t *testing.T) {
+	lines := map[string]string{
+		"atis-latch":                `{"type":"atis-latch","atis":"","sessionId":"s"}`,
+		"artifact-autoreact-ledger": `{"type":"artifact-autoreact-ledger","v":1,"sessionId":"s","artifacts":{}}`,
+		"artifact-comment-monitor":  `{"type":"artifact-comment-monitor","v":1,"sessionId":"s","artifacts":{}}`,
+		"bash_output_audience_note": `{"type":"attachment","sessionId":"s","timestamp":"2026-08-30T10:00:00Z","attachment":{"type":"bash_output_audience_note","toolUseID":"toolu_01"}}`,
+		"batching_reminder_sent":    `{"type":"attachment","sessionId":"s","timestamp":"2026-08-30T10:00:00Z","attachment":{"type":"batching_reminder_sent","text":"...","model":"claude-fable-5"}}`,
+		"silent_turn_reminder":      `{"type":"attachment","sessionId":"s","timestamp":"2026-08-30T10:00:00Z","attachment":{"type":"silent_turn_reminder","text":"..."}}`,
+		"remote_session_change":     `{"type":"attachment","sessionId":"s","timestamp":"2026-08-30T10:00:00Z","attachment":{"type":"remote_session_change","url":null,"commit":"Co-Authored-By: x","pr":"y","sendUserFileHint":true}}`,
+		"plan_mode":                 `{"type":"attachment","sessionId":"s","timestamp":"2026-08-30T10:00:00Z","attachment":{"type":"plan_mode","reminderType":"full","isSubAgent":false,"planFilePath":"/x.md","planExists":false}}`,
+	}
+	for name, line := range lines {
+		t.Run(name, func(t *testing.T) {
+			items, err := ParseLine(line)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(items) != 0 {
+				t.Fatalf("expected 0 items, got %+v", items)
+			}
+		})
+	}
+}
+
+func TestFormatToolInput_NewTools(t *testing.T) {
+	tests := []struct {
+		name  string
+		tool  string
+		input string
+		want  string
+	}{
+		{"SendUserFile with caption", "SendUserFile", `{"files":["/tmp/a/review_before.png","/tmp/a/review_poses.png"],"status":"normal","caption":"Before and after"}`, "review_before.png, review_poses.png\n  # Before and after"},
+		{"SendUserFile no caption", "SendUserFile", `{"files":["/tmp/a/x.png"]}`, "x.png"},
+		{"SendUserFile caption only", "SendUserFile", `{"caption":"hi"}`, "hi"},
+		{"AskUserQuestion", "AskUserQuestion", `{"questions":[{"question":"What scope?","header":"Scope","options":[]},{"question":"Which lib?","header":"Lib"}]}`, "What scope?\nWhich lib?"},
+		{"AskUserQuestion empty falls back", "AskUserQuestion", `{"questions":[]}`, `{"questions":[]}`},
+		{"Monitor", "Monitor", `{"command":"tail -f x.log","description":"watch the log","timeout_ms":3000}`, "tail -f x.log\n  # watch the log"},
+		{"Monitor no description", "Monitor", `{"command":"tail -f x.log"}`, "tail -f x.log"},
+		{"SendMessage", "SendMessage", `{"to":"a3b166f9","message":"Nice work"}`, "→ a3b166f9: Nice work"},
+		{"SendMessage no recipient", "SendMessage", `{"message":"Nice work"}`, "Nice work"},
+		{"ListAgents", "ListAgents", `{}`, "(list agents)"},
+		{"Artifact publish", "Artifact", `{"file_path":"/tmp/s/marblemath.html","favicon":"🔵","description":"Design doc"}`, "publish /tmp/s/marblemath.html"},
+		{"Artifact redeploy to url", "Artifact", `{"file_path":"/tmp/s/m.html","url":"https://claude.ai/code/artifact/abc"}`, "publish /tmp/s/m.html → https://claude.ai/code/artifact/abc"},
+		{"Artifact read", "Artifact", `{"action":"read","url":"https://claude.ai/code/artifact/abc"}`, "read https://claude.ai/code/artifact/abc"},
+		{"Artifact list", "Artifact", `{"action":"list"}`, "list"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := formatToolInput(tc.tool, json.RawMessage(tc.input))
+			if got != tc.want {
+				t.Errorf("formatToolInput(%s) = %q, want %q", tc.tool, got, tc.want)
+			}
+		})
+	}
+}

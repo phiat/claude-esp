@@ -264,7 +264,7 @@ func (s *StreamView) renderItem(item parser.StreamItem, width int) string {
 		}
 		return mutedStyle.Render(text)
 	}
-	if item.Type == parser.TypePRLink {
+	if item.Type == parser.TypePRLink || item.Type == parser.TypeArtifactLink {
 		return mutedStyle.Render(fmt.Sprintf("── %s ──", item.Content))
 	}
 	if item.Type == parser.TypeCacheMiss {
