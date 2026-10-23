@@ -456,6 +456,8 @@ func parseAttachment(raw RawMessage, timestamp time.Time) []StreamItem {
 		return sessionEvent(raw, timestamp, agentName, "plan mode exit", planModeExitDetail(raw.Attachment))
 	case "auto_mode":
 		return sessionEvent(raw, timestamp, agentName, "auto mode", "")
+	case "auto_mode_exit":
+		return sessionEvent(raw, timestamp, agentName, "auto mode exit", "")
 	case "deferred_tools_delta":
 		if detail := nameDeltaDetail(raw.Attachment); detail != "" {
 			return sessionEvent(raw, timestamp, agentName, "tools", detail)
@@ -982,6 +984,7 @@ func ContextWindowFor(model string) int64 {
 		strings.HasPrefix(model, "claude-mythos-5"),
 		strings.HasPrefix(model, "claude-opus-5"),
 		strings.HasPrefix(model, "claude-sonnet-5"),
+		strings.HasPrefix(model, "claude-haiku-5"),
 		strings.HasPrefix(model, "claude-opus-4-8"),
 		strings.HasPrefix(model, "claude-opus-4-7"),
 		strings.HasPrefix(model, "claude-opus-4-6"),
