@@ -851,6 +851,14 @@ func TestParseLine_AutoMode(t *testing.T) {
 	}
 }
 
+func TestParseLine_AutoModeExit(t *testing.T) {
+	line := `{"type":"attachment","timestamp":"2025-01-01T12:00:00Z","sessionId":"s","attachment":{"type":"auto_mode_exit","bashFirst":true,"steerOnly":true}}`
+	items, _ := ParseLine(line)
+	if len(items) != 1 || items[0].Type != TypeSessionEvent || items[0].ToolName != "auto mode exit" {
+		t.Fatalf("expected auto mode exit event, got %+v", items)
+	}
+}
+
 func TestParseLine_DeferredToolsDelta(t *testing.T) {
 	line := `{"type":"attachment","timestamp":"2025-01-01T12:00:00Z","sessionId":"s","attachment":{"type":"deferred_tools_delta","addedNames":["A","B","C"],"removedNames":["D"]}}`
 	items, _ := ParseLine(line)
@@ -1076,6 +1084,9 @@ func TestContextWindowFor(t *testing.T) {
 		{"claude-mythos-5", 1_000_000},
 		{"claude-opus-5", 1_000_000},
 		{"claude-sonnet-5", 1_000_000},
+		{"claude-opus-5-5", 1_000_000},
+		{"claude-sonnet-5-5", 1_000_000},
+		{"claude-haiku-5-5", 1_000_000},
 		{"claude-opus-4-8", 1_000_000},
 		{"claude-opus-4-7", 1_000_000},
 		{"claude-opus-4-6", 1_000_000},
@@ -1448,6 +1459,39 @@ func TestParseLine_V013Dropped(t *testing.T) {
 		"opened_file_in_ide":    `{"type":"attachment","timestamp":"2026-09-18T00:46:11Z","sessionId":"s","attachment":{"type":"opened_file_in_ide","filename":"/x/cpu.rs"}}`,
 		"stop_hook_summary":     `{"type":"system","subtype":"stop_hook_summary","hookCount":1,"hookInfos":[{"command":"c","durationMs":561}],"hookErrors":[],"preventedContinuation":false,"level":"suggestion","timestamp":"2026-09-19T22:30:48Z","sessionId":"s"}`,
 		"fork-context-ref":      `{"type":"fork-context-ref","agentId":"af476ef8d89ec8227","parentSessionId":"p","parentLastUuid":"u","contextLength":82}`,
+	}
+	for name, line := range lines {
+		t.Run(name, func(t *testing.T) {
+			items, err := ParseLine(line)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(items) != 0 {
+				t.Fatalf("expected 0 items, got %+v", items)
+			}
+		})
+	}
+}
+
+// Request-body capture, session plumbing and echoes of events already shown
+// elsewhere are deliberately left dropped. The type-only lines carry no
+// payload because dispatch is by type.
+func TestParseLine_V014Dropped(t *testing.T) {
+	lines := map[string]string{
+		"agent_listing_delta":       `{"type":"attachment","timestamp":"2026-10-19T23:12:49Z","sessionId":"s","attachment":{"type":"agent_listing_delta","addedTypes":["Explore","Plan"],"removedTypes":[],"isInitial":true,"showConcurrencyNote":true}}`,
+		"queued_command":            `{"type":"attachment","timestamp":"2026-10-19T23:12:49Z","sessionId":"s","attachment":{"type":"queued_command","prompt":"<task-notification><status>completed</status></task-notification>","commandMode":"task-notification"}}`,
+		"remote_session_change":     `{"type":"attachment","timestamp":"2026-10-19T23:12:49Z","sessionId":"s","attachment":{"type":"remote_session_change","url":null,"commit":"Co-Authored-By: Claude <noreply@anthropic.com>","pr":"Generated with Claude Code","sendUserFileHint":false,"managedCommit":false,"managedPr":false}}`,
+		"read_truncation_notice":    `{"type":"attachment","timestamp":"2026-10-19T23:12:49Z","sessionId":"s","attachment":{"type":"read_truncation_notice","banner":"[Truncated: PARTIAL view]"}}`,
+		"artifact-autoreact-ledger": `{"type":"artifact-autoreact-ledger","v":1,"sessionId":"s","artifacts":{"a":{"everBaselined":true,"threads":[]}}}`,
+		"artifact-comment-monitor":  `{"type":"artifact-comment-monitor","v":1,"sessionId":"s","artifacts":{"a":{"state":"armed","title":"T"}}}`,
+		"api-request-shape":         `{"type":"api-request-shape","sessionId":"s","shapeHash":"f0","timestamp":"2026-10-19T23:12:49.907Z","version":"2.1.303","shape":{"system":[{"type":"text","text":"x"}]}}`,
+		"api-request":               `{"type":"api-request","sessionId":"s"}`,
+		"api-request-blob":          `{"type":"api-request-blob","sessionId":"s"}`,
+		"atis-latch":                `{"type":"atis-latch","sessionId":"s"}`,
+		"mode":                      `{"type":"mode","sessionId":"s"}`,
+		"last-prompt":               `{"type":"last-prompt","sessionId":"s"}`,
+		"file-history-snapshot":     `{"type":"file-history-snapshot","sessionId":"s"}`,
+		"file-history-delta":        `{"type":"file-history-delta","sessionId":"s"}`,
 	}
 	for name, line := range lines {
 		t.Run(name, func(t *testing.T) {
