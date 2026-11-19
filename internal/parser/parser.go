@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -1147,7 +1148,40 @@ func extractToolResultContent(raw json.RawMessage) string {
 	return string(raw)
 }
 
+// workflowMetaName matches the name in a workflow script's
+// `export const meta = { name: '...', ... }` header.
+var workflowMetaName = regexp.MustCompile(`meta\s*=\s*\{[^}]*?\bname:\s*['"]([^'"]+)['"]`)
+
+// formatWorkflowInput summarises a Workflow call. The call carries the whole
+// script (several KB) and free-form args, so it is decoded apart from ToolInput
+// and shown as the workflow's name or its script file.
+func formatWorkflowInput(inputRaw json.RawMessage) string {
+	var input struct {
+		Name       string `json:"name"`
+		Script     string `json:"script"`
+		ScriptPath string `json:"scriptPath"`
+	}
+	if err := json.Unmarshal(inputRaw, &input); err != nil {
+		return string(inputRaw)
+	}
+	switch {
+	case input.Name != "":
+		return input.Name
+	case input.ScriptPath != "":
+		return input.ScriptPath
+	case input.Script != "":
+		if m := workflowMetaName.FindStringSubmatch(input.Script); m != nil {
+			return m[1]
+		}
+		return fmt.Sprintf("inline script (%d bytes)", len(input.Script))
+	}
+	return string(inputRaw)
+}
+
 func formatToolInput(toolName string, inputRaw json.RawMessage) string {
+	if toolName == "Workflow" {
+		return formatWorkflowInput(inputRaw)
+	}
 	var input ToolInput
 	if err := json.Unmarshal(inputRaw, &input); err != nil {
 		// Return raw JSON if we can't parse the input
