@@ -17,7 +17,7 @@ When using Claude Code interactively, tool outputs and thinking are collapsed by
 - **Multi-session support** - Watch all active Claude sessions simultaneously
 - **Hierarchical tree view** - Sessions with nested Main/Agent nodes
 - **Real-time streaming** - See thinking, tool calls, and outputs as they happen
-- **Subagent tracking** - Automatically discovers and displays subagent activity
+- **Subagent tracking** - Automatically discovers and displays subagent activity, including the agents of `Workflow` runs
 - **Session events** - Compaction boundaries, hook output (including hook errors, blocked stops and injected context), post-edit LSP diagnostics, PR-link and artifact-link events, session-cost summaries (cost, lines changed, models used), session continuations, background-task progress, prompt-cache misses (with reason + extra tokens), queue operations, slash-command invocations, transient notices, killed-subagent markers, model refusals, scheduled-task (cron / loop) fires, plan/auto mode transitions, permission-mode changes, and skill/MCP/tool deltas surfaced inline
 - **Agent type labels** - Shows agent types (Explore, code-reviewer, etc.) from `.meta.json`
 - **Token usage tracking** - Cumulative input/output token counts in the header bar
@@ -149,6 +149,7 @@ Subagents are stored in:
 
 ```
 ~/.claude/projects/<project-path>/<session-id>/subagents/agent-<id>.jsonl
+~/.claude/projects/<project-path>/<session-id>/subagents/workflows/<run>/agent-<id>.jsonl
 ```
 
 Background task outputs are stored in:

@@ -1335,6 +1335,11 @@ func TestFormatToolInput_NewTools(t *testing.T) {
 		{"SubagentHandback", "SubagentHandback", `{"message":"## Unison: report\n\nAll 6 snippets pass."}`, "## Unison: report\n\nAll 6 snippets pass."},
 		{"CronDelete", "CronDelete", `{"id":"0d4716b9"}`, "cron 0d4716b9"},
 		{"SendFeedback", "SendFeedback", `{"type":"bug","title":"Picker needs a mouse","details":"- **What happened:** ..."}`, "Picker needs a mouse"},
+		{"Workflow inline script", "Workflow", `{"script":"export const meta = {\n  name: 'research-bc-races',\n  description: 'x',\n  phases: [{ title: 'Research' }],\n}\nconst r = await agent('go')"}`, "research-bc-races"},
+		{"Workflow script without meta name", "Workflow", `{"script":"const r = await agent('go')"}`, "inline script (27 bytes)"},
+		{"Workflow saved name", "Workflow", `{"name":"review-changes","args":{"pr":7}}`, "review-changes"},
+		{"Workflow script path", "Workflow", `{"scriptPath":"/tmp/wf.js"}`, "/tmp/wf.js"},
+		{"Workflow empty falls back", "Workflow", `{}`, `{}`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1492,6 +1497,42 @@ func TestParseLine_V014Dropped(t *testing.T) {
 		"last-prompt":               `{"type":"last-prompt","sessionId":"s"}`,
 		"file-history-snapshot":     `{"type":"file-history-snapshot","sessionId":"s"}`,
 		"file-history-delta":        `{"type":"file-history-delta","sessionId":"s"}`,
+	}
+	for name, line := range lines {
+		t.Run(name, func(t *testing.T) {
+			items, err := ParseLine(line)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(items) != 0 {
+				t.Fatalf("expected 0 items, got %+v", items)
+			}
+		})
+	}
+}
+
+// Attachments that echo file contents, IDE state and carried-over schedules,
+// plus the account and tool-name lines and the workflow journal, are
+// deliberately left dropped. The workflow journal (started / result /
+// launched) is not read by the watcher; the lines are listed here in case a
+// session file ever contains them.
+func TestParseLine_V015Dropped(t *testing.T) {
+	lines := map[string]string{
+		"file":                   `{"type":"attachment","timestamp":"2026-11-01T10:00:00Z","sessionId":"s","attachment":{"type":"file","filename":"/x/build.zig","content":{"type":"text","file":{"filePath":"/x/build.zig","content":"const std = @import(\"std\");"}}}}`,
+		"compact_file_reference": `{"type":"attachment","timestamp":"2026-11-01T10:00:00Z","sessionId":"s","attachment":{"type":"compact_file_reference","filename":"/x/README.md","displayPath":"../x/README.md"}}`,
+		"selected_lines_in_ide":  `{"type":"attachment","timestamp":"2026-11-01T10:00:00Z","sessionId":"s","attachment":{"type":"selected_lines_in_ide","ideName":"Visual Studio Code","lineStart":54,"lineEnd":54,"filename":"/x/players.rs","content":"..","displayPath":"src/players.rs"}}`,
+		"invoked_skills":         `{"type":"attachment","timestamp":"2026-11-01T10:00:00Z","sessionId":"s","attachment":{"type":"invoked_skills","skills":[{"name":"p:pr","path":"plugin:p:pr","content":"Use this template"}]}}`,
+		"directory":              `{"type":"attachment","timestamp":"2026-11-01T10:00:00Z","sessionId":"s","attachment":{"type":"directory","path":"/x","content":"Cargo.toml\nsrc","displayPath":"../x"}}`,
+		"task_reminder":          `{"type":"attachment","timestamp":"2026-11-01T10:00:00Z","sessionId":"s","attachment":{"type":"task_reminder","content":[],"itemCount":0}}`,
+		"session_cron_carry":     `{"type":"attachment","timestamp":"2026-11-01T10:00:00Z","sessionId":"s","attachment":{"type":"session_cron_carry","tasks":[],"wakeup":{"prompt":"continue","scheduledFor":1794318240000,"reason":"waiting"}}}`,
+		"edited_text_file":       `{"type":"attachment","timestamp":"2026-11-01T10:00:00Z","sessionId":"s","attachment":{"type":"edited_text_file","filename":"/x/a.go","snippet":"1\tpackage x"}}`,
+		"credential_org":         `{"type":"attachment","timestamp":"2026-11-01T10:00:00Z","sessionId":"s","attachment":{"type":"credential_org"}}`,
+		"command_permissions":    `{"type":"attachment","timestamp":"2026-11-01T10:00:00Z","sessionId":"s","attachment":{"type":"command_permissions","allowedTools":["Bash"]}}`,
+		"session-owner":          `{"type":"session-owner","accountUuid":"a","organizationUuid":"o","sessionId":"s"}`,
+		"tools-used":             `{"type":"tools-used","tools":["Bash","Read"],"sessionId":"s"}`,
+		"workflow started":       `{"type":"started","key":"v2:ea2e","agentId":"afce7224","label":"race-7","phase":"Research and write"}`,
+		"workflow result":        `{"type":"result","key":"v2:ea2e","agentId":"afce7224","result":"File written."}`,
+		"workflow launched":      `{"type":"launched"}`,
 	}
 	for name, line := range lines {
 		t.Run(name, func(t *testing.T) {

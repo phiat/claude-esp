@@ -629,3 +629,154 @@ func TestConcurrentDebounce(t *testing.T) {
 		t.Errorf("got %d debounce timers, want at most %d", count, len(paths))
 	}
 }
+
+// --- workflow agents (<session>/subagents/workflows/<run>/agent-*.jsonl) ---
+
+// writeWorkflowTree makes a session dir holding one plain subagent and one
+// workflow run with an agent, its meta file and the run's journal.jsonl. It
+// returns the subagents dir.
+func writeWorkflowTree(t *testing.T, projectDir, sessionID string) string {
+	t.Helper()
+	subagentDir := filepath.Join(projectDir, sessionID, "subagents")
+	runDir := filepath.Join(subagentDir, "workflows", "wf_1")
+	if err := os.MkdirAll(runDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		filepath.Join(subagentDir, "agent-plain.jsonl"):     "",
+		filepath.Join(runDir, "agent-wf1.jsonl"):            "",
+		filepath.Join(runDir, "agent-wf1.meta.json"):        `{"agentType":"workflow-subagent"}`,
+		filepath.Join(runDir, "journal.jsonl"):              `{"type":"launched"}` + "\n",
+		filepath.Join(subagentDir, "agent-plain.meta.json"): `{"agentType":"Explore"}`,
+	}
+	for path, body := range files {
+		if err := os.WriteFile(path, []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return subagentDir
+}
+
+func TestSubagentFiles_IncludesWorkflowAgentsNotJournal(t *testing.T) {
+	subagentDir := writeWorkflowTree(t, t.TempDir(), "sess")
+
+	got := map[string]bool{}
+	for _, p := range subagentFiles(subagentDir) {
+		got[filepath.Base(p)] = true
+	}
+	want := map[string]bool{"agent-plain.jsonl": true, "agent-wf1.jsonl": true}
+	if len(got) != len(want) || !got["agent-plain.jsonl"] || !got["agent-wf1.jsonl"] {
+		t.Fatalf("subagentFiles = %v, want %v", got, want)
+	}
+}
+
+func TestSessionIDFromSubagentPath(t *testing.T) {
+	tests := map[string]string{
+		"/p/-proj/sess1/subagents/agent-a.jsonl":                "sess1",
+		"/p/-proj/sess1/subagents/workflows/wf_9/agent-a.jsonl": "sess1",
+		"/p/-proj/sess1/subagents/workflows/wf_9/journal.jsonl": "sess1",
+		"/p/-proj/sess1.jsonl":                                  "",
+	}
+	for path, want := range tests {
+		if got := sessionIDFromSubagentPath(path); got != want {
+			t.Errorf("sessionIDFromSubagentPath(%q) = %q, want %q", path, got, want)
+		}
+	}
+}
+
+func TestBuildSession_FindsWorkflowAgents(t *testing.T) {
+	projectDir := filepath.Join(t.TempDir(), "-test-project")
+	writeWorkflowTree(t, projectDir, "sess")
+	mainFile := filepath.Join(projectDir, "sess.jsonl")
+	os.WriteFile(mainFile, []byte(""), 0644)
+
+	w := newTestWatcher(t, filepath.Dir(projectDir), false)
+	session, err := w.buildSession(mainFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := session.Subagents["wf1"]; !ok {
+		t.Errorf("workflow agent wf1 missing from Subagents: %v", session.Subagents)
+	}
+	if _, ok := session.Subagents["journal"]; ok {
+		t.Error("journal.jsonl registered as a subagent")
+	}
+	if got := session.SubagentTypes["wf1"]; got != "workflow-subagent" {
+		t.Errorf("agent type = %q, want workflow-subagent", got)
+	}
+}
+
+func TestCheckForNewSubagents_FindsWorkflowAgents(t *testing.T) {
+	projectDir := filepath.Join(t.TempDir(), "-test-project")
+	writeWorkflowTree(t, projectDir, "sess")
+	mainFile := filepath.Join(projectDir, "sess.jsonl")
+	os.WriteFile(mainFile, []byte(""), 0644)
+
+	w := newTestWatcher(t, filepath.Dir(projectDir), false)
+	session := &Session{
+		ID:              "sess",
+		MainFile:        mainFile,
+		Subagents:       make(map[string]string),
+		SubagentTypes:   make(map[string]string),
+		BackgroundTasks: make(map[string]*BackgroundTask),
+	}
+	w.checkForNewSubagents(session)
+
+	got := map[string]string{}
+	for len(w.NewAgent) > 0 {
+		msg := <-w.NewAgent
+		got[msg.AgentID] = msg.AgentType
+	}
+	if got["wf1"] != "workflow-subagent" || got["plain"] != "Explore" || len(got) != 2 {
+		t.Fatalf("NewAgent messages = %v, want wf1 and plain only", got)
+	}
+}
+
+func TestFsnotifyNewWorkflowAgentDiscovery(t *testing.T) {
+	tmpDir := t.TempDir()
+	projectDir := filepath.Join(tmpDir, "-test-project")
+	subagentDir := filepath.Join(projectDir, "sess003", "subagents")
+	os.MkdirAll(subagentDir, 0755)
+	sessionFile := filepath.Join(projectDir, "sess003.jsonl")
+	os.WriteFile(sessionFile, []byte(""), 0644)
+
+	w := newTestWatcher(t, tmpDir, true)
+	w.watchActive.Store(true)
+	session := &Session{
+		ID:              "sess003",
+		ProjectPath:     "test/project",
+		MainFile:        sessionFile,
+		Subagents:       make(map[string]string),
+		SubagentTypes:   make(map[string]string),
+		BackgroundTasks: make(map[string]*BackgroundTask),
+	}
+	w.sessions[session.ID] = session
+	w.registerSessionWatches(session)
+	w.addDirectoryWatches(tmpDir)
+
+	go w.watchLoopFsnotify()
+
+	// The run directory, its journal and its agent appear after the watch starts.
+	time.Sleep(50 * time.Millisecond)
+	runDir := filepath.Join(subagentDir, "workflows", "wf_2")
+	os.MkdirAll(runDir, 0755)
+	os.WriteFile(filepath.Join(runDir, "journal.jsonl"), []byte(`{"type":"launched"}`+"\n"), 0644)
+	os.WriteFile(filepath.Join(runDir, "agent-wfx.meta.json"), []byte(`{"agentType":"workflow-subagent"}`), 0644)
+	os.WriteFile(filepath.Join(runDir, "agent-wfx.jsonl"), []byte(""), 0644)
+
+	select {
+	case msg := <-w.NewAgent:
+		if msg.SessionID != "sess003" || msg.AgentID != "wfx" || msg.AgentType != "workflow-subagent" {
+			t.Errorf("got %+v, want session sess003, agent wfx, type workflow-subagent", msg)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for workflow agent discovery")
+	}
+
+	// Nothing else (the journal) is announced as an agent.
+	select {
+	case msg := <-w.NewAgent:
+		t.Errorf("unexpected extra agent %+v", msg)
+	case <-time.After(200 * time.Millisecond):
+	}
+}

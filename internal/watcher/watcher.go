@@ -113,6 +113,60 @@ func isMainSessionFile(path string, info os.FileInfo) bool {
 	return true
 }
 
+// isAgentFile reports whether a file name is a subagent transcript
+// (agent-<id>.jsonl). Workflow runs also write a journal.jsonl next to their
+// agents; it is run bookkeeping and is not a transcript.
+func isAgentFile(name string) bool {
+	return strings.HasPrefix(name, "agent-") && strings.HasSuffix(name, ".jsonl")
+}
+
+// subagentFiles lists the subagent transcripts of a session. Most live in
+// <session>/subagents/; the agents of a workflow run live one level deeper, in
+// <session>/subagents/workflows/<run>/.
+func subagentFiles(subagentDir string) []string {
+	var paths []string
+	if entries, err := os.ReadDir(subagentDir); err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() && isAgentFile(entry.Name()) {
+				paths = append(paths, filepath.Join(subagentDir, entry.Name()))
+			}
+		}
+	}
+	runs, err := os.ReadDir(filepath.Join(subagentDir, "workflows"))
+	if err != nil {
+		return paths
+	}
+	for _, run := range runs {
+		if !run.IsDir() {
+			continue
+		}
+		runDir := filepath.Join(subagentDir, "workflows", run.Name())
+		if entries, err := os.ReadDir(runDir); err == nil {
+			for _, entry := range entries {
+				if !entry.IsDir() && isAgentFile(entry.Name()) {
+					paths = append(paths, filepath.Join(runDir, entry.Name()))
+				}
+			}
+		}
+	}
+	return paths
+}
+
+// agentIDFromPath returns the agent id of an agent-<id>.jsonl path.
+func agentIDFromPath(path string) string {
+	return strings.TrimPrefix(strings.TrimSuffix(filepath.Base(path), ".jsonl"), "agent-")
+}
+
+// sessionIDFromSubagentPath returns the id of the session that owns a file
+// under <session>/subagents/, however deeply it is nested.
+func sessionIDFromSubagentPath(path string) string {
+	idx := strings.LastIndex(path, "/subagents/")
+	if idx < 0 {
+		return ""
+	}
+	return filepath.Base(path[:idx])
+}
+
 // Session represents a Claude Code session with its files
 type Session struct {
 	ID              string
@@ -334,16 +388,11 @@ func (w *Watcher) buildSession(mainFile string) (*Session, error) {
 
 	// Find subagent files
 	subagentDir := filepath.Join(filepath.Dir(mainFile), id, "subagents")
-	if entries, err := os.ReadDir(subagentDir); err == nil {
-		for _, entry := range entries {
-			if strings.HasSuffix(entry.Name(), ".jsonl") {
-				agentID := strings.TrimPrefix(strings.TrimSuffix(entry.Name(), ".jsonl"), "agent-")
-				jsonlPath := filepath.Join(subagentDir, entry.Name())
-				session.Subagents[agentID] = jsonlPath
-				if agentType := readAgentType(jsonlPath); agentType != "" {
-					session.SubagentTypes[agentID] = agentType
-				}
-			}
+	for _, jsonlPath := range subagentFiles(subagentDir) {
+		agentID := agentIDFromPath(jsonlPath)
+		session.Subagents[agentID] = jsonlPath
+		if agentType := readAgentType(jsonlPath); agentType != "" {
+			session.SubagentTypes[agentID] = agentType
 		}
 	}
 
@@ -1001,7 +1050,7 @@ func (w *Watcher) scanNewDirectory(path string) {
 		}
 		name := entry.Name()
 		switch {
-		case base == "subagents" && strings.HasSuffix(name, ".jsonl"):
+		case strings.Contains(fullPath, "/subagents/") && isAgentFile(name):
 			w.handleNewSubagentFile(fullPath)
 		case base == "tool-results" && strings.HasSuffix(name, ".txt"):
 			w.handleNewToolResultFile(fullPath)
@@ -1118,17 +1167,15 @@ func readAgentType(jsonlPath string) string {
 
 // handleNewSubagentFile processes discovery of a new subagent JSONL file
 func (w *Watcher) handleNewSubagentFile(path string) {
-	if !strings.HasSuffix(path, ".jsonl") {
+	if !isAgentFile(filepath.Base(path)) {
 		return
 	}
 
-	agentID := strings.TrimPrefix(strings.TrimSuffix(filepath.Base(path), ".jsonl"), "agent-")
+	agentID := agentIDFromPath(path)
 
-	// Find which session owns this subagent by walking up the path:
-	// .../projects/<project>/<sessionID>/subagents/agent-<id>.jsonl
-	subagentsDir := filepath.Dir(path)
-	sessionDir := filepath.Dir(subagentsDir)
-	sessionID := filepath.Base(sessionDir)
+	// Find which session owns this subagent from the path:
+	// .../projects/<project>/<sessionID>/subagents/[workflows/<run>/]agent-<id>.jsonl
+	sessionID := sessionIDFromSubagentPath(path)
 
 	w.sessionsMu.RLock()
 	session, exists := w.sessions[sessionID]
@@ -1296,35 +1343,27 @@ func (w *Watcher) checkForNewSessions() {
 
 func (w *Watcher) checkForNewSubagents(session *Session) {
 	subagentDir := filepath.Join(filepath.Dir(session.MainFile), session.ID, "subagents")
-	entries, err := os.ReadDir(subagentDir)
-	if err != nil {
-		return
-	}
+	for _, path := range subagentFiles(subagentDir) {
+		agentID := agentIDFromPath(path)
 
-	for _, entry := range entries {
-		if strings.HasSuffix(entry.Name(), ".jsonl") {
-			agentID := strings.TrimPrefix(strings.TrimSuffix(entry.Name(), ".jsonl"), "agent-")
-			path := filepath.Join(subagentDir, entry.Name())
+		// Check and add with write lock to avoid TOCTOU race
+		agentType := readAgentType(path)
 
-			// Check and add with write lock to avoid TOCTOU race
-			agentType := readAgentType(path)
-
-			session.mu.Lock()
-			_, exists := session.Subagents[agentID]
-			if exists {
-				session.mu.Unlock()
-				continue
-			}
-			session.Subagents[agentID] = path
-			if agentType != "" {
-				session.SubagentTypes[agentID] = agentType
-			}
+		session.mu.Lock()
+		_, exists := session.Subagents[agentID]
+		if exists {
 			session.mu.Unlock()
+			continue
+		}
+		session.Subagents[agentID] = path
+		if agentType != "" {
+			session.SubagentTypes[agentID] = agentType
+		}
+		session.mu.Unlock()
 
-			select {
-			case w.NewAgent <- NewAgentMsg{SessionID: session.ID, AgentID: agentID, AgentType: agentType}:
-			default:
-			}
+		select {
+		case w.NewAgent <- NewAgentMsg{SessionID: session.ID, AgentID: agentID, AgentType: agentType}:
+		default:
 		}
 	}
 }
